@@ -14,18 +14,18 @@ This repository is still in early stages and will constantly be updated with new
 For now, to run the LRI forward model and LRI deblurring please see follow along with ```test.py```. A Jupyter notebook will be added shortly. 
 
 There are 3 main functions of interest located in ```functions.py```
-### 1) calibrate
+*1) calibrate*
 Here we pass in either a calibration image such as ```test_images/calibration_image.tif``` or Seidel aberration coefficients (i.e., [sphere, astigmatism, coma, field curvature, distortion]). We get back a stack of the rotational fourier transforms (see paper appendix E) of PSFs along a radial line and the Seidel coefficients.
 ```
 psf_stack_roft, seidel_coeffs = calibrate(calib_image, dimension, num_radii, seidel_coeffs)
 ```
-### 2a) blur
+*2a) blur*
 With PSFs in hand we can simulate the blurring of an imaging system using the LRI forward model. We simply pass in a test object such as ```test_images/baboon.png``` and our PSF stack obtained from the calibration step.
 ```
 blurred_image = blur(object, psf_stack_roft)
 ```
 
-### 2b) deblur
+*2b) deblur*
 Alternatively we can choose to invert the LRI forward model to instead perform image deblurring. Again we only need the PSF stack from step 1 in addition to the blurry image we would like to deblur.
 ```
 deblurred_image = deblur(blurred_image, psf_stack_roft)
@@ -35,14 +35,14 @@ This is the basic procedure; more details can be found in ```test.py```.
 
 
 The necessary packages to run this code are:
-*numpy
-*pytorch
-*scipy
-*skimage
-*PIL
-*cv2
-*matplotlib
-*tqdm
+* numpy
+* pytorch
+* scipy
+* skimage
+* PIL
+* cv2
+* matplotlib
+* tqdm
 
 
 ## Contact
