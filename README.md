@@ -13,7 +13,8 @@ This repository is still in early stages and will constantly be updated with new
 
 For now, to run the LRI forward model and LRI deblurring please see follow along with ```test.py```. A Jupyter notebook will be added shortly. 
 
-There are 3 main functions of interest located in ```functions.py```
+There are 3 main functions of interest located in ```functions.py```:
+
 **1) calibrate**
 Here we pass in either a calibration image such as ```test_images/calibration_image.tif``` or Seidel aberration coefficients (i.e., [sphere, astigmatism, coma, field curvature, distortion]). We get back a stack of the rotational fourier transforms (see paper appendix E) of PSFs along a radial line and the Seidel coefficients.
 ```
