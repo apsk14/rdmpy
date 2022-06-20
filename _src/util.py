@@ -49,7 +49,7 @@ def get_calib_info(calib_image, center, desired_dim):
 
     coord_list = []
     for i in range(raw_coord.shape[0]):
-        if np.abs(raw_coord[i, 1] - center[1]) < dim[1] // 2 and np.abs(center[0] - raw_coord[i, 0]) < dim[0] // 2:
+        if np.abs(raw_coord[i, 1] - center[1]) < desired_dim[1] // 2 and np.abs(center[0] - raw_coord[i, 0]) < desired_dim[0] // 2:
             coord_list += [(raw_coord[i, 1] - center[1], center[0] - raw_coord[i, 0])]
 
     calib_image[calib_image < 0] = 0
