@@ -51,8 +51,6 @@ def video_recon(measurement_stack, psf_stack_roft, opt_params, device):
 
 def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
     dim = measurement.shape
-    measurement = util.normalize(measurement)
-
     if opt_params['init'] == 'measurement':
         estimate = torch.tensor(measurement, device=device).float()
     elif opt_params['init'] == 'zero':
@@ -185,8 +183,6 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
     l2_loss_fn = torch.nn.MSELoss()
     smooth_l1 = torch.nn.SmoothL1Loss()
     fig = plt.figure()
-    camera = Camera(fig)
-    crop = 225
 
     for iter in range(opt_params['iters']):
         # forward pass
