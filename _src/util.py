@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.image as py
 import math
-import pickle as pkl
-from celluloid import Camera
 import scipy.ndimage as im
 from skimage.transform import resize
 #import cv2
@@ -36,13 +34,14 @@ def getSeidelList(sidelength, num_radii):
     return diag_list
 
 
-def get_calib_info(calib_image, center, desired_dim):
+def get_calib_info(calib_image, center, desired_dim, centered_psf=True):
     psf = calib_image.copy()
     psf[psf < 0] = 0
     psf[psf < np.quantile(psf, 0.9)] = 0
     raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=30, indices=True, threshold_rel=0)
     distances = np.sqrt(np.sum(np.square(raw_coord - center), axis=1))
-    center = raw_coord[np.argmin(distances), :]
+    if centered_psf:
+        center = raw_coord[np.argmin(distances), :]
 
     calib_image = calib_image[center[0] - desired_dim[0] // 2:center[0] + desired_dim[0] // 2,
           center[1] - desired_dim[1] // 2:center[1] + desired_dim[1] // 2]
@@ -59,34 +58,6 @@ def get_calib_info(calib_image, center, desired_dim):
     return coord_list, center, calib_image
 
 
-
-
-
-
-
-
-
-
-def getCircList(center, radius, num_points): #expects center = [x,y]
-    return [(int(np.floor(math.cos((2 * math.pi / num_points) * x) * radius + center[0])),
-            int(np.floor(math.sin((2 * math.pi / num_points) * x) * radius + center[1]))) for x in range(0, num_points)]
-
-
-def getSpiralList(center, radius, num_points): #expects center = [x,y]
-    return [(int(np.floor(math.cos((4 * math.pi / num_points) * x) * (radius+x) + center[0])),
-            int(np.floor(math.sin((4 * math.pi / num_points) * x) * (radius+x) + center[1]))) for x in range(0, num_points)]
-
-
-def getRadialImpulse(dim, radii, sparsity=2):
-    point_list = []
-    for r in radii:
-        point_list += getCircList((dim[0] // 2, dim[0] // 2), r, r//sparsity)
-    point_list = list(set(point_list))
-    circular_impulse = np.zeros(dim)
-    point_list += [(dim[0] // 2, dim[1] // 2)]
-    for p in point_list:
-        circular_impulse[p[1], p[0]] = 1
-    return circular_impulse, point_list
 
 def align_psf(psf, center_coords, output_shape): #in (x,y)
     if psf.shape[0] > output_shape[0]:
@@ -113,41 +84,6 @@ def align_psf(psf, center_coords, output_shape): #in (x,y)
     psf[psf < 0] = 0 #make sure no negative values came in from interpolation
     return psf
 
-def upsample(psf_list, r_list, num_points):
-    radius_size = len(psf_list)
-    num_insert = int(np.floor(num_points / radius_size))
-    new_psf_list = []
-    new_r_list = []
-    for i in range(0, len(psf_list)-1):
-        for j in range(0, num_insert):
-            new_r_list += [np.sqrt(2*(((1 - (j / num_insert)) * i + (j / num_insert) * (i+1)))**2)]
-            psf = (1 - (j / num_insert)) * psf_list[i] + (j / num_insert) * psf_list[i+1]
-            new_psf_list += [psf]
-    new_psf_list += [psf_list[radius_size-1]]
-    new_r_list += [r_list[radius_size - 1]]
-    return new_psf_list, new_r_list
-
-def make_psf_video(point_list, dataset, path):
-    fig = plt.figure()
-    camera = Camera(fig)
-    psf_list = dataset.get_psfs(point_list, use_polar=False)
-    for psf in psf_list:
-        plt.imshow(psf, cmap='gray')
-        camera.snap()
-    animation = camera.animate()
-    animation.save(path)
-
-def make_psf_grid(point_list, dataset, path='', logscale=False):
-    psf_list = dataset.get_psfs(point_list, use_polar=False)
-    psf_grid = sum(psf_list)
-    if logscale:
-        psf_grid = np.log(psf_grid+.001)
-    if path != '':
-        py.imsave(path+'.png', psf_grid, cmap='gray')
-        np.save(path+'.npy', psf_grid)
-    else:
-        return psf_grid
-
 
 def mkdir(path):
     if not os.path.exists(path):
@@ -165,12 +101,6 @@ def resize_complex(mat, shape):
     reals = np.real(mat)
     imag = np.imag(mat)
     return resize(reals, shape) + resize(imag, shape)
-
-
-# def flip_complex(mat, axis):
-#     reals = np.real(mat)
-#     imag = np.imag(mat)
-#     return cv2.flip(reals, axis) + cv2.flip(imag, axis)
 
 
 def save(path, obj, type):

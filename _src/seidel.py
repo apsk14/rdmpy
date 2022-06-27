@@ -6,6 +6,7 @@ This file contains functions for computing PSFs from seidel coefficients and for
 coefficients from PSF data
 """
 
+from ast import Num
 import csv
 from tqdm import tqdm
 import scipy as sp
@@ -17,7 +18,6 @@ import torch
 import torch.nn.functional as fun
 from torch.fft import fftn, ifftn
 import matplotlib.pyplot as plt
-from celluloid import Camera
 import pathlib
 from skimage.restoration import unwrap_phase as unwrap
 dirname = str(pathlib.Path(__file__).parent.parent.absolute())
@@ -42,6 +42,7 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
     return pupil_phase
 
 def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), polar=False, verbose=False, stack=False):
+    num_radii = len(desired_list)
     desired_list = [(torch.tensor(i[0], device=device).float(), torch.tensor(i[1], device=device).float()) for i in desired_list]
     iterable_coords = tqdm(desired_list) if verbose else desired_list
     samples = sys_params['samples']
@@ -58,10 +59,13 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
     scale_factor = ((lamb * z) / pupil_radius)
     circle = circ(torch.sqrt(torch.square(Fx) + torch.square(Fy)) * scale_factor, radius=1)
     if stack:
-        if samples > 500:
-            desired_psfs = torch.zeros((samples, samples*2, samples))
+        if polar: 
+            if samples > 500:
+                desired_psfs = torch.zeros((samples, samples*2, samples), device=device)
+            else:
+                desired_psfs = torch.zeros((samples, samples*4, samples), device=device)
         else:
-            desired_psfs = torch.zeros((samples, samples*4, samples))
+            desired_psfs = torch.zeros((samples, samples, samples), device=device)
     else:
         desired_psfs = []
     idx = 0
@@ -78,7 +82,7 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
         curr_psf = curr_psf[int(samples / 2):-int(samples / 2), int(samples / 2):-int(samples / 2)]
         curr_psf = curr_psf / curr_psf.sum()
         if polar:
-            curr_psf = polar_transform.img2polar(curr_psf.float())
+            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
         if stack:
             desired_psfs[idx, :, :] = curr_psf.to(device)
         else:

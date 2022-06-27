@@ -6,32 +6,18 @@ Amit Kohli
 This file runs all experiments and unit tests. It utilizes the code in src/ and experiment/
 """
 
-import matplotlib.image as py
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from skimage import io
-from skimage.transform import resize
-from skimage.color import rgb2gray
 import numpy as np
-#import polarTransform as pt
 import os
-import scipy.ndimage as im
 import pathlib
 from _src import util, lri, seidel
-from skimage import exposure as exp
-from celluloid import Camera
-from collections import namedtuple
 from skimage.restoration import unwrap_phase as unwrap
-from skimage import restoration
 import torch.fft as fft
-import kornia
 from tqdm import tqdm
 
-import time
 import pdb
 import torch
 dirname = str(pathlib.Path(__file__).parent.absolute())
-Params = namedtuple('Params', 'A rs ths psf_tensor_fft')
 
 # TODO: Make an experiments/ directory and have different files for each experiment.
 # TODO: BUG: wiener doesn't work unless 1) run forward with inverse flips, 2 delete inverse, 3) run inverse without flips
@@ -184,13 +170,12 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
     smooth_l1 = torch.nn.SmoothL1Loss()
     fig = plt.figure()
 
-    for iter in range(opt_params['iters']):
+    for iter in tqdm(range(opt_params['iters'])):
         # forward pass
-        psfs_estimate, pupils = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, sys_params=sys_params, device=coeffs.device)\
+        psfs_estimate = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, stack=False, sys_params=sys_params, device=coeffs.device)\
         # loss
         loss = l2_loss_fn(sum(psfs_estimate).float(), psfs_gt) + opt_params['reg']*l2_loss_fn(coeffs, -coeffs)
         # loss = loss_fn((measurement[:,:350]), (measurement_guess[:,:350])) #+ tv(estimate, 1e-9)
-        print(iter, loss.item())
 
         # backward
         optimizer.zero_grad()
@@ -198,7 +183,6 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
         optimizer.step()
 
 
-    print(coeffs)
     if plot:
         util.show(torch.cat((psfs_gt/psfs_gt.max(), sum(psfs_estimate)/sum(psfs_estimate).max()), dim=1).detach().cpu())
         util.show(sum(psfs_estimate).detach().cpu())

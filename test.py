@@ -19,10 +19,11 @@ def main():
     dim = 512
 
     #pick a calibration image or some random seidel coefficients 
-    calib_image=None
-    seidel_coeffs =  [0, 3, 2, 1.5, 0, 0]
-    #calib_image = np.array(Image.open('test_images/calibration_image.tif')) 
-    #seidel_coeffs=None
+    #calib_image=None
+    #seidel_coeffs =  [0, 3, 2, 1.5, 0, 0]
+    #seidel_coeffs =  [0, 0.01, 0, 0, 0, 0]
+    calib_image = np.array(Image.open('test_images/calibration_image.tif')) 
+    seidel_coeffs=None
 
 
     #get a radial stack of the system's PSFs (either provide seidel coefficients or a calibration image with a few PSFs in it)
