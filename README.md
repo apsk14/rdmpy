@@ -35,8 +35,6 @@ Alternatively we can choose to invert the LRI forward model to instead perform i
 deblurred_image = deblur(blurred_image, psf_stack_roft)
 ```
 
-This is the basic procedure; more details can be found in ```test.py```.
-
 
 The necessary packages to run this code are:
 * numpy
