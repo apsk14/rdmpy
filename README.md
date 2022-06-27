@@ -7,7 +7,7 @@ Official implementation of Linear Revolution-Invariant modeling and deblurring.
 
 LRI forward modeling allows one to compute the output of any rotationally symmetric imaging system given only a few of its PSFs or its Seidel aberration coefficients. Simiarly, LRI deblurring offers a fast and more accurate alternative to deconvolution (e.g., Wiener filter, Richardson-Lucy) by accounting for radially-varying blur. LRI deblurring only requires a single calibration image of a few randomly scattered PSFs. This repository implements both LRI forward modeling and LRI deblurring via two functions ```blur``` and ```deblur```.
 
-This repository is still in early stages and will constantly be updated with new functionality and bug-fixes. In light of this **please run a ```git pull``` before every use.** There will soon by a PyPI version which can be installed directly with pip.
+This repository is still in early stages and will constantly be updated with new functionality and bug-fixes. In light of this **please run a ```git pull``` before every use.** It will soon be a PyPI package directly installable with pip.
 
 ## Useage
 
