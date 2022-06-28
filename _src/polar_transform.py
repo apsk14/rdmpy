@@ -8,7 +8,7 @@ import torch.nn.functional as fun
 import matplotlib.pyplot as plt
 from skimage.color import rgb2gray
 #from src.ddn.ddn.pytorch.node import *
-from ._src import util
+from . import util
 import pdb
 
 dirname = str(pathlib.Path(__file__).parent.absolute())

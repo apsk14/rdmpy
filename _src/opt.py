@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pathlib
-from ._src import util, lri, seidel
+from . import util, lri, seidel
 from skimage.restoration import unwrap_phase as unwrap
 import torch.fft as fft
 from tqdm import tqdm
