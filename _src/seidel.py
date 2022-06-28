@@ -10,7 +10,7 @@ from ast import Num
 import csv
 from tqdm import tqdm
 import scipy as sp
-from _src import util, polar_transform
+from ._src import util, polar_transform
 from bisect import bisect
 from scipy.ndimage import shift
 import numpy as np
