@@ -1,7 +1,7 @@
 #code containing methods utilizing the linear revolution invariant:
 #import polarTransform as pt
 import numpy as np
-from . import  polar_transform, util
+from _src import  polar_transform, util
 from tqdm import tqdm
 import torch
 import torch.fft as fft

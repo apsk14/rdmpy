@@ -3,7 +3,7 @@
 import torch
 import numpy as np
 import torch.fft as fft
-from ._src import opt, seidel, lri, util
+from _src import opt, seidel, lri, util
 import pdb
 
 '''
