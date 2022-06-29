@@ -19,6 +19,8 @@ Arguments:
 
     seidel_coeffs - (6 x 1) numpy array. The primary seidel coefficients with a defocus parameter appended before
 
+    centered_psf - boolean (True or False). Specifies whether a PSF is centered in the image.
+    
     sys_params -  parameters of the system takes the form of a dictionary: {'samples': N, 'L': sidelength length of sensor, 'lamb': wavelength,
                       'pupil_radius': radius of system pupil, 'z': distance from pupil to sensor}. All lengths are in millimeters
 
@@ -34,7 +36,7 @@ Returns:
 
     seidel_coeffs - (6 x 1) numpy array storing the 5 primary coefficients preceded by a defocus parameter. These coefficients were used to generate psf_stack_roft
 '''
-def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, opt_params=None, sys_params=None,  verbose=True, device=torch.device('cpu')):
+def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_psf=True, opt_params=None, sys_params=None,  verbose=True, device=torch.device('cpu')):
     # First step is to get the seidel coefficients by processing and fitting the calibration image
     if sys_params is None:
         sys_params = {'samples': desired_dim, 'L': 7.33333333333 * 0.0003072, 'lamb': 0.510e-6,
@@ -47,7 +49,7 @@ def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, opt_params
             opt_params = {'iters': 1000, 'lr': 2e-3, 'reg': 0}
 
         center = [calib_image.shape[0]//2, calib_image.shape[1]//2]
-        psf_locations, center, calib_image = util.get_calib_info(calib_image, center, [desired_dim, desired_dim])  # going to be in (x,y) relative to center. Center will be row, col from top left of raw_image
+        psf_locations, center, calib_image = util.get_calib_info(calib_image, center, [desired_dim, desired_dim], centered_psf=centered_psf)  # going to be in (x,y) relative to center. Center will be row, col from top left of raw_image
 
         '''Need to generalize this to multishot'''
         if verbose:
