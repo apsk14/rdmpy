@@ -10,7 +10,7 @@ from ast import Num
 import csv
 from tqdm import tqdm
 import scipy as sp
-from _src import util, polar_transform
+from . import util, polar_transform
 from bisect import bisect
 from scipy.ndimage import shift
 import numpy as np
@@ -84,9 +84,9 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
         if polar:
             curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
         if stack:
-            desired_psfs[idx, :, :] = curr_psf.to(device)
+            desired_psfs[idx, :, :] = curr_psf
         else:
-            desired_psfs += [curr_psf.to(device)]
+            desired_psfs += [curr_psf]
         idx += 1
 
 

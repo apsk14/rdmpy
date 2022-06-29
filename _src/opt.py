@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pathlib
-from _src import util, lri, seidel
+from . import util, lri_forward, seidel
 from skimage.restoration import unwrap_phase as unwrap
 import torch.fft as fft
 from tqdm import tqdm
@@ -38,14 +38,13 @@ def video_recon(measurement_stack, psf_stack_roft, opt_params, device):
 def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
     dim = measurement.shape
     if opt_params['init'] == 'measurement':
-        estimate = torch.tensor(measurement, device=device).float()
+        estimate = measurement.clone()
     elif opt_params['init'] == 'zero':
         estimate = torch.zeros(dim, device=device)
     elif opt_params['init'] == 'noise':
         estimate = torch.randn(dim, device=device)
     else:
         raise NotImplemented
-    measurement = torch.tensor(measurement, device=device).float()
 
     estimate.requires_grad = True
 
@@ -63,7 +62,7 @@ def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
     for it in tqdm(range(opt_params['iters'])):
 
         # forward pass
-        measurement_guess = lri.blur(estimate, psf_stack_roft, method='normal', device=device, verbose=False, diff=diff)
+        measurement_guess = lri_forward.forward(estimate, psf_stack_roft, method='normal', device=device, verbose=False, diff=diff)
 
         # loss
         if crop > 0:
@@ -164,11 +163,8 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
     coeffs.requires_grad = True
 
     optimizer = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    #optimizer = torch.optim.SGD([coeffs], lr=opt_params['lr'])
-    l1_loss_fn = torch.nn.L1Loss()
     l2_loss_fn = torch.nn.MSELoss()
-    smooth_l1 = torch.nn.SmoothL1Loss()
-    fig = plt.figure()
+    
 
     for iter in tqdm(range(opt_params['iters'])):
         # forward pass
@@ -195,11 +191,6 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
 def blind_image_recon(measurement, method, model, opt_params, cache, init=None):
 
     device = model.dataset.device
-    if init is None:
-        if method == 'lsi_blind':
-            coeffs = torch.randn((1, 1), device=device)
-        elif method == 'lri_blind':
-            coeffs = torch.randn((3, 1), device=device)
 
     estimate = torch.tensor(measurement, device=device).float()
     #estimate = torch.zeros(model.dataset.dim, device=device)

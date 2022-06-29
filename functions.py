@@ -1,9 +1,11 @@
 #Code implementing the user functions for lri-deblur. These functions can be directly imported via from lri-deblur import calibrate, blur, deblur
-
+import sys
+import pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import torch
 import numpy as np
 import torch.fft as fft
-from _src import opt, seidel, lri, util
+from _src import opt, seidel, lri_forward, util
 import pdb
 
 '''
@@ -57,9 +59,9 @@ def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, opt_params
 
     if verbose:
             print('computing radial stack of PSFs...')
-    psf_stack = seidel.compute_psfs(seidel_coeffs, point_list, sys_params, device=device, polar=True, verbose=verbose)
-    psf_stack = torch.stack(psf_stack)
-    psf_stack_roft = fft.rfft(psf_stack, dim=1).to(device)
+    psf_stack_roft = seidel.compute_psfs(seidel_coeffs.cpu(), point_list, sys_params, polar=True, verbose=verbose, stack=False)
+    psf_stack_roft = torch.stack(psf_stack_roft)
+    psf_stack_roft = fft.rfft(psf_stack_roft, dim=1).to(device)
 
     return psf_stack_roft, seidel_coeffs
 
@@ -89,13 +91,13 @@ def blur(obj, psf_stack_roft, verbose=False, artifact_correction=0.5, device=tor
     #diff image stuff
     if artifact_correction:
         constant = torch.ones(obj.shape, device=device)  * artifact_correction
-        constant_response = lri.blur(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
+        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
         diff = constant - constant_response
     else:
         diff = None
 
     obj = torch.from_numpy(obj).float().to(device)
-    return lri.blur(obj, psf_stack_roft, method='normal', device=device, verbose=verbose, diff=diff)
+    return lri_forward.forward(obj, psf_stack_roft, method='normal', device=device, verbose=verbose, diff=diff)
 
 
 
@@ -123,13 +125,17 @@ Returns
 def deblur(image, psf_stack_roft, opt_params=None, verbose=False, artifact_correction=0.5, device=torch.device('cpu')):
     if artifact_correction:
         constant = torch.ones(image.shape, device=device)  * artifact_correction
-        constant_response = lri.blur(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
+        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
         diff = constant - constant_response
     else:
         diff = None
 
     if opt_params is None:
         opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'crop': 0, 'reg': 1e-11}
+    
     if not torch.is_tensor(image):
-        image = torch.tensor(image, device=device).float()
+        image = torch.tensor(image).float()
+    if image.device is not device:
+        image = image.to(device)
+
     return opt.image_recon(image, psf_stack_roft, opt_params, diff, device)

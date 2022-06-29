@@ -1,14 +1,14 @@
 #code containing methods utilizing the linear revolution invariant:
 #import polarTransform as pt
 import numpy as np
-from _src import  polar_transform, util
+from . import  polar_transform, util
 from tqdm import tqdm
 import torch
 import torch.fft as fft
 import pdb
 
 
-def blur(obj, psf_tensor_fft, method='normal', device=None, verbose=False, diff=None):
+def forward(obj, psf_tensor_fft, method='normal', device=None, verbose=False, diff=None):
 
     # get appropriate radii for chosen PSF sampling
     num_radii = psf_tensor_fft.shape[0]
