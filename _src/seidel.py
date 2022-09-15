@@ -73,25 +73,39 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
         W = compute_pupil_phase(lamb*coeffs, X=-Fx * scale_factor, Y=-Fy * scale_factor, u=(point[0])/(samples/2), v=-(point[1])/(samples/2)) #point[0]/(sys_params['samples']/2)
         H = circle * torch.exp(-1j * k * W)  # weird phase issue here?"
         H[circle < 1e-12] = 0
-        coherent_psf = torch.fft.ifftn(H)
-        curr_psf = torch.roll(coherent_psf, shifts=(-coherent_psf.shape[0] // 2, -coherent_psf.shape[1] // 2),
-                              dims=(0, 1))
+        #pdb.set_trace()
+        curr_psf = torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(H)))
+        #curr_psf = torch.roll(coherent_psf, shifts=(-coherent_psf.shape[0] // 2, -coherent_psf.shape[1] // 2),
+                              #dims=(0, 1))
         curr_psf = torch.square(torch.abs(curr_psf))
-        curr_psf = fun.pad(curr_psf, (int(samples / 2), int(samples / 2), int(samples / 2), int(samples / 2)))
-        curr_psf = torch.roll(curr_psf, (-int(point[1]), int(point[0])), dims=(0, 1))
-        curr_psf = curr_psf[int(samples / 2):-int(samples / 2), int(samples / 2):-int(samples / 2)]
+        #curr_psf = fun.pad(curr_psf, (int(samples / 2), int(samples / 2), int(samples / 2), int(samples / 2)))
+        
+        
+        #curr_psf = torch.roll(curr_psf, (-int(point[1]), int(point[0])), dims=(0, 1))
+        #curr_psf = torch.tensor(shift(curr_psf, (-(point[1]), (point[0]))))
+        curr_psf = util.shift_torch(curr_psf, (-(point[1].cpu().numpy()), (point[0].cpu().numpy())), mode='bicubic')
+
+        #curr_psf = curr_psf[int(samples / 2):-int(samples / 2), int(samples / 2):-int(samples / 2)]
+
+        curr_psf[curr_psf < curr_psf.quantile(0.9)] = 0
         curr_psf = curr_psf / curr_psf.sum()
+
         if polar:
-            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
+            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii, ispsf=True)
+            #curr_psf = curr_psf/curr_psf.sum()
         if stack:
             desired_psfs[idx, :, :] = curr_psf
         else:
             desired_psfs += [curr_psf]
         idx += 1
+    
+    #pdb.set_trace()
 
 
     return desired_psfs
 
+def get_center_psf(coeffs, sys_params, device=torch.device('cpu'), polar=False, verbose=False, stack=False):
+    return compute_psfs(coeffs, [(0,0)] , sys_params, device=torch.device('cpu'), polar=False, verbose=False, stack=False)[0]
 
 def generate_psf_dataset(path, sys_params, coeffs, type='grid'):
 

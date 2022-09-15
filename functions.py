@@ -36,11 +36,16 @@ Returns:
 
     seidel_coeffs - (6 x 1) numpy array storing the 5 primary coefficients preceded by a defocus parameter. These coefficients were used to generate psf_stack_roft
 '''
-def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_psf=True, opt_params=None, sys_params=None,  verbose=True, device=torch.device('cpu')):
+def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_psf=True, opt_params=None, min_distance=30, sys_params=None,   verbose=True, device=torch.device('cpu')):
     # First step is to get the seidel coefficients by processing and fitting the calibration image
     if sys_params is None:
-        sys_params = {'samples': desired_dim, 'L': 7.33333333333 * 0.0003072, 'lamb': 0.510e-6,
-                      'pupil_radius': 1e-3, 'z': 12.957e-3}
+        # sys_params = {'samples': desired_dim, 'L': 7.33333333333 * 0.0003072, 'lamb': 0.510e-6,
+        #               'pupil_radius': 1e-3, 'z': 12.957e-3}
+
+        sys_params = {'samples': desired_dim, 'L': 1e-3, 'lamb': 0.55e-6,
+                      'pupil_radius': 10e-3, 'z': 100e-3}
+
+
     if seidel_coeffs is not None:
         seidel_coeffs = torch.tensor(seidel_coeffs)
     else:
@@ -49,13 +54,15 @@ def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_p
             opt_params = {'iters': 1000, 'lr': 2e-3, 'reg': 0}
 
         center = [calib_image.shape[0]//2, calib_image.shape[1]//2]
-        psf_locations, center, calib_image = util.get_calib_info(calib_image, center, [desired_dim, desired_dim], centered_psf=centered_psf)  # going to be in (x,y) relative to center. Center will be row, col from top left of raw_image
+        psf_locations, center, calib_image = util.get_calib_info(calib_image, center, [desired_dim, desired_dim], min_distance=min_distance, centered_psf=centered_psf)  # going to be in (x,y) relative to center. Center will be row, col from top left of raw_image
 
         '''Need to generalize this to multishot'''
         if verbose:
             print('estimating seidel coefficients...')
         seidel_coeffs = opt.estimate_coeffs_ss(calib_image, psf_locations, sys_params, opt_params, device)
 
+    if verbose:
+        print(seidel_coeffs)
     # Next, with seidel coefficients, we generate the radial line of PSFs needed for LRI operations
     point_list = util.getSeidelList(desired_dim, num_psfs)
 
@@ -65,7 +72,10 @@ def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_p
     psf_stack_roft = torch.stack(psf_stack_roft)
     psf_stack_roft = fft.rfft(psf_stack_roft, dim=1).to(device)
 
-    return psf_stack_roft, seidel_coeffs
+    center_psf = seidel.get_center_psf(seidel_coeffs.cpu(), sys_params, polar=False, verbose=verbose, stack=False)
+    center_psf = center_psf.to(device)
+
+    return (center_psf, psf_stack_roft), seidel_coeffs
 
 
 
@@ -93,7 +103,7 @@ def blur(obj, psf_stack_roft, verbose=False, artifact_correction=0.5, device=tor
     #diff image stuff
     if artifact_correction:
         constant = torch.ones(obj.shape, device=device)  * artifact_correction
-        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
+        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose, calib=True)
         diff = constant - constant_response
     else:
         diff = None
@@ -127,13 +137,13 @@ Returns
 def deblur(image, psf_stack_roft, opt_params=None, verbose=False, artifact_correction=0.5, device=torch.device('cpu')):
     if artifact_correction:
         constant = torch.ones(image.shape, device=device)  * artifact_correction
-        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose)
+        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose,  calib=True)
         diff = constant - constant_response
     else:
         diff = None
 
     if opt_params is None:
-        opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'crop': 0, 'reg': 1e-11}
+        opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'crop': 0, 'reg': 1e-11, 'l2_reg': 0}
     
     if not torch.is_tensor(image):
         image = torch.tensor(image).float()

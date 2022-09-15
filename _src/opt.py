@@ -59,17 +59,21 @@ def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
     crop = opt_params['crop']
 
     losses = []
+    reg_vec = (torch.linspace(0,1, (psf_stack_roft[1].shape[1]-1) *2)[:, None]) *opt_params['l2_reg']
+    reg_vec = reg_vec.to(device)
     for it in tqdm(range(opt_params['iters'])):
 
         # forward pass
-        measurement_guess = lri_forward.forward(estimate, psf_stack_roft, method='normal', device=device, verbose=False, diff=diff)
+        measurement_guess, obj = lri_forward.forward(estimate, psf_stack_roft, method='normal', device=device, verbose=False, diff=diff)
 
         # loss
         if crop > 0:
             loss = loss_fn((measurement_guess)[crop:-crop, crop:-crop], (measurement)[crop:-crop, crop:-crop]) + \
-                    tv(estimate[crop:-crop, crop:-crop], opt_params['reg'])
+                    tv(estimate[crop:-crop, crop:-crop], opt_params['reg']) + torch.norm(reg_vec*obj)
+                    
+                    #torch.norm(estimate[crop:-crop, crop:-crop]) * opt_params['l2_reg']
         else:
-            loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['reg'])
+            loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['reg']) + + torch.norm(reg_vec*obj)
 
         losses += [loss.detach().cpu()]
 
@@ -166,7 +170,7 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
     l2_loss_fn = torch.nn.MSELoss()
     
 
-    for iter in tqdm(range(opt_params['iters'])):
+    for iter in range(opt_params['iters']):
         # forward pass
         psfs_estimate = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, stack=False, sys_params=sys_params, device=coeffs.device)\
         # loss
@@ -177,9 +181,10 @@ def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_in
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        print(iter, loss.item())
 
 
-    if plot:
+    if True:
         util.show(torch.cat((psfs_gt/psfs_gt.max(), sum(psfs_estimate)/sum(psfs_estimate).max()), dim=1).detach().cpu())
         util.show(sum(psfs_estimate).detach().cpu())
 

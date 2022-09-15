@@ -14,6 +14,7 @@ from cv2 import VideoWriter, VideoWriter_fourcc
 from skimage.feature import corner_peaks
 from skimage.morphology import (erosion, disk)
 import torch
+from torch.nn.functional import grid_sample
 PLT_SIZE = 5
 
 #TODO: get diagonal list given non-square dimensions
@@ -29,16 +30,16 @@ def write_video(path, array, fps=float(24)):
 def getSeidelList(sidelength, num_radii):
     fraction = (sidelength/2)/num_radii
     diag_list = []
-    for i in range(0, num_radii): #start was 0!
-        diag_list += [((i*fraction),  (i*fraction))]
+    for i in np.linspace(0, num_radii, num_radii, endpoint=False): #start was 0!
+        diag_list += [((i*fraction),  -(i*fraction))]
     return diag_list
 
 
-def get_calib_info(calib_image, center, desired_dim, centered_psf=True):
+def get_calib_info(calib_image, center, desired_dim, min_distance, centered_psf=True):
     psf = calib_image.copy()
     psf[psf < 0] = 0
     psf[psf < np.quantile(psf, 0.9)] = 0
-    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=30, indices=True, threshold_rel=0)
+    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=min_distance, indices=True, threshold_rel=0)
     distances = np.sqrt(np.sum(np.square(raw_coord - center), axis=1))
     if centered_psf:
         center = raw_coord[np.argmin(distances), :]
@@ -205,11 +206,47 @@ def process(test, back, center, dim):
     return test_image
 
 
-def center_crop(measurement, des_shape):
+def center_crop(measurement, des_shape, m_center=None):
     # Center crop
-    m_center = (measurement.shape[0]//2, measurement.shape[1]//2)
+    #print('woah')
+    if m_center is None:
+        m_center = (measurement.shape[0]//2, measurement.shape[1]//2)
     left, right, up, down = ( m_center[1] - des_shape[1]//2, m_center[1] + int(np.round(des_shape[1]/2)),  \
                               m_center[0] - des_shape[0]//2, m_center[0] + int(np.round(des_shape[0]/2)))
     # TODO: Debug this for images of an odd size.
-    measurement = measurement[left:right,up:down]
+    measurement = measurement[up:down,left:right]
     return measurement
+
+def getCircList(center, radius, num_points): #expects center = [x,y]
+    return [(int(np.floor(math.cos((2 * math.pi / num_points) * x) * radius + center[0])),
+            int(np.floor(math.sin((2 * math.pi / num_points) * x) * radius + center[1]))) for x in range(0, num_points)]
+
+
+def getSpiralList(center, radius, num_points): #expects center = [x,y]
+    return [(int(np.floor(math.cos((4 * math.pi / num_points) * x) * (radius+x) + center[0])),
+            int(np.floor(math.sin((4 * math.pi / num_points) * x) * (radius+x) + center[1]))) for x in range(0, num_points)]
+
+
+def getRadialImpulse(dim, radii, sparsity=2):
+    point_list = []
+    for r in radii:
+        point_list += getCircList((dim[0] // 2, dim[0] // 2), r, r//sparsity)
+    point_list = list(set(point_list))
+    circular_impulse = np.zeros(dim)
+    point_list += [(dim[0] // 2, dim[1] // 2)]
+    for p in point_list:
+        circular_impulse[p[1], p[0]] = 1
+    return circular_impulse, point_list
+
+
+def shift_torch(img, shift, mode='bilinear'):
+    xs = np.arange(0, img.shape[1]) - shift[1]
+    ys = np.arange(0, img.shape[0]) - shift[0]
+    x, y = np.meshgrid(xs, ys)
+
+    gx = 2.0 * (x / (img.shape[1] - 1)) - 1.
+    gy = 2.0 * (y / (img.shape[0] - 1)) - 1.
+
+    grid = torch.tensor(np.concatenate((gx[:,:,None], gy[:,:,None]), axis=2), device=img.device)
+
+    return grid_sample(img[None, None,:,:].float(), grid[None,:,:].float(), padding_mode='zeros', mode=mode, align_corners=True).squeeze()
