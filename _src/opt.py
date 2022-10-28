@@ -10,41 +10,112 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pathlib
-from . import util, lri_forward, seidel
+from . import util, forward, seidel
 from skimage.restoration import unwrap_phase as unwrap
 import torch.fft as fft
 from tqdm import tqdm
+import kornia
 
 import pdb
 import torch
+
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
-# TODO: Make an experiments/ directory and have different files for each experiment.
-# TODO: BUG: wiener doesn't work unless 1) run forward with inverse flips, 2 delete inverse, 3) run inverse without flips
+
+# single shot version
+def estimate_coeffs(calib_image, psf_list, sys_params, fit_params, device, show_psfs=False):
+
+    psfs_gt = torch.tensor(calib_image, device=device).float()
+    if fit_params['init'] == 'zeros':
+            coeffs = torch.zeros((fit_params['num_seidel'], 1), device=device)
+    elif fit_params['init'] == 'random':
+            coeffs = torch.rand((fit_params['num_seidel'], 1), device=device)
+    else:
+        raise NotImplemented
+
+    coeffs.requires_grad = True
+
+    optimizer = torch.optim.Adam([coeffs], lr=fit_params['lr'])
+    l2_loss_fn = torch.nn.MSELoss()
+
+    if fit_params['plot_loss']:
+        losses = []
+
+    for iter in tqdm(range(fit_params['iters'])):
+        # forward pass
+        if coeffs.shape[0] < 6:
+            psfs_estimate = seidel.compute_psfs(torch.cat(( coeffs, torch.zeros(6-coeffs.shape[0], 1, device=device) )), desired_list=psf_list, stack=False, sys_params=sys_params, device=coeffs.device)
+        else:
+            psfs_estimate = seidel.compute_psfs(coeffs, desired_list=psf_list, stack=False, sys_params=sys_params, device=coeffs.device)
+        # loss
+        loss = l2_loss_fn(sum(psfs_estimate).float(), psfs_gt) + fit_params['reg']*l2_loss_fn(coeffs, -coeffs)
+
+        if fit_params['plot_loss']:
+            losses += [loss.detach().cpu()]
+
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    if show_psfs:
+        psf_est = sum(psfs_estimate)/(len(psfs_estimate))
+        
+        plt.subplot(1,2,1)
+        plt.imshow(psf_est.detach().cpu())
+        plt.gca().set_title('Seidel PSFs')
+
+        plt.subplot(1,2,2)
+        plt.imshow(psfs_gt.detach().cpu())
+        plt.gca().set_title('Measured PSFs')
+
+    if fit_params['plot_loss']:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
+    
+       #util.show(torch.cat((psfs_gt/psfs_gt.max(), sum(psfs_estimate)/sum(psfs_estimate).max()), dim=1).detach().cpu())
+
+    if coeffs.shape[0] < 6:
+        return torch.cat((coeffs, torch.zeros(6-coeffs.shape[0], 1, device=device) ))
+    else:
+        return coeffs
 
 
-def video_recon(measurement_stack, psf_stack_roft, opt_params, device):
+def video_recon(measurement_stack, psf_data, model, opt_params, device, use_prev_frame=True):
+
     num_frames = measurement_stack.shape[0]
-    psfs = None
+
     for i in range(num_frames):
+        #recon frame by frame
         print('frame: ' + str(i))
         curr_frame = measurement_stack[i, :, :]
-        estimate, _, _, psfs = image_recon(curr_frame, psf_stack_roft, opt_params, device)
-        # for memory recons, replace measurement stack
+
+        if use_prev_frame and i>0:
+            estimate = image_recon(curr_frame, psf_data, model, opt_params=opt_params, device=device, warm_start=measurement_stack[i-1, :, :])
+        else:
+            estimate = image_recon(curr_frame, psf_data, model, opt_params=opt_params, device=device)
+
+        # for memory efficiency, replace measurement stack
         measurement_stack[i, :, :] = estimate
     return measurement_stack
 
 
-def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
+def image_recon(measurement, psf_data, model, opt_params, device, verbose=False, warm_start=None):
+    
     dim = measurement.shape
-    if opt_params['init'] == 'measurement':
-        estimate = measurement.clone()
-    elif opt_params['init'] == 'zero':
-        estimate = torch.zeros(dim, device=device)
-    elif opt_params['init'] == 'noise':
-        estimate = torch.randn(dim, device=device)
+    
+    if warm_start is not None:
+         estimate = warm_start.clone()
     else:
-        raise NotImplemented
+        if opt_params['init'] == 'measurement':
+            estimate = measurement.clone()
+        elif opt_params['init'] == 'zero':
+            estimate = torch.zeros(dim, device=device)
+        elif opt_params['init'] == 'noise':
+            estimate = torch.randn(dim, device=device)
+        else:
+            raise NotImplemented
 
     estimate.requires_grad = True
 
@@ -59,26 +130,34 @@ def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
     crop = opt_params['crop']
 
     losses = []
-    reg_vec = (torch.linspace(0,1, (psf_stack_roft[1].shape[1]-1) *2)[:, None]) *opt_params['l2_reg']
-    reg_vec = reg_vec.to(device)
+    
+    if model=='lri':
+        reg_vec = (torch.linspace(0,1, measurement.shape[0])[None, :]) *opt_params['l2_reg']
+        reg_vec = reg_vec.to(device)
+
+    if opt_params['plot_loss']:
+        losses = []
+        
     for it in tqdm(range(opt_params['iters'])):
 
-        # forward pass
-        measurement_guess, obj = lri_forward.forward(estimate, psf_stack_roft, method='normal', device=device, verbose=False, diff=diff)
-
-        # loss
-        if crop > 0:
-            loss = loss_fn((measurement_guess)[crop:-crop, crop:-crop], (measurement)[crop:-crop, crop:-crop]) + \
-                    tv(estimate[crop:-crop, crop:-crop], opt_params['reg']) + torch.norm(reg_vec*obj)
-                    
-                    #torch.norm(estimate[crop:-crop, crop:-crop]) * opt_params['l2_reg']
+        # forward pass and loss
+        if model == 'lsi':
+            measurement_guess = forward.lsi(estimate, psf_data)
+            if crop > 0:
+                loss = loss_fn((measurement_guess)[crop:-crop, crop:-crop], (measurement)[crop:-crop, crop:-crop]) + \
+                    tv(estimate[crop:-crop, crop:-crop], opt_params['tv_reg']) + opt_params['l2_reg']*torch.norm(estimate)
+            else:
+                loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['tv_reg']) + opt_params['l2_reg']*torch.norm(estimate)
         else:
-            loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['reg']) + + torch.norm(reg_vec*obj)
+            measurement_guess, obj = forward.lri(estimate, psf_data, method='normal', device=device, verbose=False)
+            if crop > 0:
+                loss = loss_fn((measurement_guess)[crop:-crop, crop:-crop], (measurement)[crop:-crop, crop:-crop]) + \
+                    tv(estimate[crop:-crop, crop:-crop], opt_params['tv_reg']) + torch.norm(reg_vec*obj)
+            else:
+                loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['tv_reg']) #+ torch.norm(reg_vec*obj)
 
-        losses += [loss.detach().cpu()]
-
-        # print loss
-        #print(it, loss.item())
+        if opt_params['plot_loss']:
+            losses += [loss.detach().cpu()]
 
         # backward
         optimizer.zero_grad()
@@ -89,213 +168,50 @@ def image_recon(measurement, psf_stack_roft, opt_params, diff, device):
         estimate.data[estimate.data < 0] = 0
         estimate.data[estimate.data > 1] = 1
 
+    if opt_params['plot_loss']:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
+
     return util.normalize(estimate.detach().cpu().float().numpy())
 
 
+def blind_recon(measurement, opt_params, sys_params, device=torch.device('cpu')):
 
-def estimate_coeffs(psf_data, sys_params, opt_params, std_init='random', init=None, plot=False, device=torch.device('cpu')):
-
-    cache_path = dirname + '/data/.cache/'
-    half_length = sys_params['L'] / 2
-    psf_list = [(torch.tensor(i[0], device=device).float(), torch.tensor(i[1], device=device).float()) for i in psf_data[0]]
-    psfs_gt = torch.stack([torch.tensor(psf, device=device).float() for psf in psf_data[1]], dim=0)
-    if init is None:
-        if std_init == 'zeros':
-            coeffs = torch.zeros((3, 1), device=device)
-        elif std_init == 'random':
-            coeffs = torch.rand((3, 1), device=device)
-        else:
-            raise NotImplemented
-    else:
-        coeffs = torch.tensor(init, device=device).float()
-
-    coeffs.requires_grad = True
-
-    optimizer = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    #optimizer = torch.optim.SGD([coeffs], lr=opt_params['lr'])
-    l1_loss_fn = torch.nn.L1Loss()
-    l2_loss_fn = torch.nn.MSELoss()
-    smooth_l1 = torch.nn.SmoothL1Loss()
-    fig = plt.figure()
-    camera = Camera(fig)
-    crop = 225
-
-    for iter in range(opt_params['iters']):
-        # forward pass
-        psfs_estimate, pupils = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, sys_params=sys_params, device=coeffs.device)\
-        # loss
-        loss = l2_loss_fn(torch.stack(psfs_estimate, dim=0).float(), psfs_gt) + opt_params['reg']*l2_loss_fn(coeffs, -coeffs)
-        # loss = loss_fn((measurement[:,:350]), (measurement_guess[:,:350])) #+ tv(estimate, 1e-9)
-        print(iter, loss.item())
-
-        # backward
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-
-    print(coeffs)
-    if plot:
-        for gt, psf, pupil in zip(psfs_gt, psfs_estimate, pupils):
-            #pdb.set_trace()
-            util.show(torch.cat((gt/gt.max(), psf/psf.max()), dim=1).detach())
-            util.show(psf.detach())
-            plt.figure()
-            plt.imshow(unwrap(torch.angle(pupil).detach()))
-            plt.colorbar()
-            plt.show()
-
-
-    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
-    return torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device)), ).detach()
-
-# single shot version
-def estimate_coeffs_ss(psf_img, psf_list, sys_params, opt_params, device, std_init='zeros', init=None, plot=False):
-
-    #psf_list = [(torch.tensor(i[0], device=device).float(), torch.tensor(i[1], device=device).float()) for i in psf_list]
-    psfs_gt = torch.tensor(psf_img, device=device).float()
-    if init is None:
-        if std_init == 'zeros':
-            coeffs = torch.zeros((3, 1), device=device)
-        elif std_init == 'random':
-            coeffs = torch.rand((3, 1), device=device)
-        else:
-            raise NotImplemented
-    else:
-        coeffs = torch.tensor(init, device=device).float()
-
-    coeffs.requires_grad = True
-
-    optimizer = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    l2_loss_fn = torch.nn.MSELoss()
-    
-
-    for iter in range(opt_params['iters']):
-        # forward pass
-        psfs_estimate = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, stack=False, sys_params=sys_params, device=coeffs.device)\
-        # loss
-        loss = l2_loss_fn(sum(psfs_estimate).float(), psfs_gt) + opt_params['reg']*l2_loss_fn(coeffs, -coeffs)
-        # loss = loss_fn((measurement[:,:350]), (measurement_guess[:,:350])) #+ tv(estimate, 1e-9)
-
-        # backward
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        print(iter, loss.item())
-
-
-    if True:
-        util.show(torch.cat((psfs_gt/psfs_gt.max(), sum(psfs_estimate)/sum(psfs_estimate).max()), dim=1).detach().cpu())
-        util.show(sum(psfs_estimate).detach().cpu())
-
-
-    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
-    return torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device)), ).detach()
-
-
-def blind_image_recon(measurement, method, model, opt_params, cache, init=None):
-
-    device = model.dataset.device
-
-    estimate = torch.tensor(measurement, device=device).float()
-    #estimate = torch.zeros(model.dataset.dim, device=device)
-    measurement = torch.tensor(measurement, device=device).float()
-    
-
-    coeffs.requires_grad = True
-    estimate.requires_grad = True
-
-    sys_params = model.dataset.sys_params
-
-    opt_est = torch.optim.Adam([estimate], lr=opt_params['lr'])
-    opt_coeff = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    #optimizer = torch.optim.SGD([coeffs], lr=opt_params['lr'])
-    l1_loss_fn = torch.nn.L1Loss()
-    l2_loss_fn = torch.nn.MSELoss()
-    smooth_l1 = torch.nn.SmoothL1Loss()
-    fig = plt.figure()
-    camera = Camera(fig)
-    crop = 225
-    COUNT = 10
-    est = True
-
-    for iter in range(opt_params['iters']):
-        # forward pass
-        #psfs_estimate, pupils = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(4, 1, device=device) )), desired_list=[(0,0)], sys_params=sys_params, device=coeffs.device) 
-        measurement_guess,_ = model.forward(estimate, method=method, coeffs=coeffs, cache=cache, verbose=True)
-
-        # loss
-        sharpness = -torch.norm(torch.abs(kornia.spatial_gradient(estimate[None, None, :, :], mode='diff')))
-        consistency = l2_loss_fn(measurement_guess.float(), measurement) + tv(estimate, opt_params['reg'])
-
-        loss =  consistency + tv(estimate, opt_params['reg']) + 1e-10*sharpness
-
-        print(str(iter) + ' consistency: ' + str(consistency.detach().cpu().numpy()) + ', sharpness: ' + str(-sharpness.detach().cpu().numpy()))
-
-        # backward
-        opt_est.zero_grad()
-        opt_coeff.zero_grad()
-        loss.backward()
-
-        if est:
-           opt_est.step() 
-        else:
-           opt_coeff.step() 
-
-        estimate.data[estimate.data < 0] = 0
-        estimate.data[estimate.data > 1] = 1
-        if iter % COUNT:
-            est = not est
-
-    print(coeffs)
-    util.show(estimate.detach().cpu())
-
-    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
-    return estimate.detach().cpu().numpy(), coeffs.detach().cpu().numpy()
-
-
-def blind_recon(measurement, method, model, opt_params, cache, init=None):
-
-    device = model.dataset.device
-
-    if init is None:
+    if opt_params['seidel_init'] is None:
         coeffs = torch.zeros((1, 1), device=device) 
 
-    measurement = torch.tensor(measurement, device=device).float()
-
     coeffs.requires_grad = True
-    sys_params = model.dataset.sys_params
 
     optimizer = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    #optimizer = torch.optim.SGD([coeffs], lr=opt_params['lr'])
-    l1_loss_fn = torch.nn.L1Loss()
-    l2_loss_fn = torch.nn.MSELoss()
-    smooth_l1 = torch.nn.SmoothL1Loss()
-    fig = plt.figure()
-    camera = Camera(fig)
-    crop = 225
 
-    for iter in range(opt_params['iters']):
+
+    if opt_params['plot_loss']:
+        losses = []
+
+    for iter in tqdm(range(opt_params['iters'])):
         # forward pass
-        psfs_estimate, _ = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(4, 1, device=device) )), desired_list=[(0,0)], sys_params=sys_params, device=coeffs.device) 
-        recon = wiener_torch(((measurement - 0.5) * 2).reshape(model.dataset.dim), psfs_estimate[0]) # can also use .wiener with ,balance=3e-4
+        psfs_estimate = seidel.compute_psfs(torch.cat((coeffs, torch.zeros(5, 1, device=device) )), desired_list=[(0,0)], sys_params=sys_params, device=coeffs.device)[0] 
+        recon = wiener_torch(((measurement - 0.5) * 2), psfs_estimate, balance=opt_params['balance']) # can also use .wiener with ,balance=3e-4
         recon = (recon/2)+0.5 # back-scale
 
         # loss (maximizing acutance)
         loss = -torch.mean(torch.abs(kornia.spatial_gradient(recon[None, None, :, :], mode='diff')))
-        print(iter, -loss.item())
+        if opt_params['plot_loss']:
+            losses += [loss.detach().cpu()]
 
         # backward
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        #coeffs.data[coeffs.data < 0] = 0
 
-    print(coeffs)
+    if opt_params['plot_loss']:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
 
-    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
-    return recon.detach().cpu().numpy(), coeffs.detach().cpu().numpy()
+    return recon.detach().cpu().numpy(), psfs_estimate.detach().cpu().numpy(), coeffs.detach().cpu().numpy()
 
 
 def tv(img, weight):
@@ -311,6 +227,66 @@ def center_crop(measurement, des_shape):
     # TODO: Debug this for images of an odd size.
     measurement = measurement[left:right,up:down]
     return measurement
+
+
+def blind_recon_alt(measurement, opt_params, sys_params, device):
+
+    if opt_params['seidel_init'] is None:
+        #coeffs = torch.rand((1, 1), device=device) 
+        coeffs = torch.zeros((1, 1), device=device)
+
+
+    #estimate = torch.tensor(measurement, device=device).float()
+    estimate = torch.zeros_like(measurement, device=device)
+    measurement = torch.tensor(measurement, device=device).float()
+    
+
+    coeffs.requires_grad = True
+    estimate.requires_grad = True
+
+
+    opt_est = torch.optim.Adam([estimate], lr=opt_params['lr'])
+    opt_coeff = torch.optim.Adam([coeffs], lr=opt_params['lr'])
+    l2_loss_fn = torch.nn.MSELoss()
+    # fig = plt.figure()
+    # camera = Camera(fig)
+    SWITCH_FREQ = 10
+    est = True
+
+    for iter in tqdm(range(opt_params['iters'])):
+        # forward pass
+        #psfs_estimate, pupils = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(4, 1, device=device) )), desired_list=[(0,0)], sys_params=sys_params, device=coeffs.device) 
+        psfs_estimate = seidel.compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(4, 1, device=device) )), desired_list=[(0,0)], sys_params=sys_params, device=coeffs.device)[0] 
+        measurement_guess = forward.lsi(estimate, psfs_estimate)
+
+        # loss
+        sharpness = -torch.norm(torch.abs(kornia.spatial_gradient(estimate[None, None, :, :], mode='diff')))
+        consistency = l2_loss_fn(measurement_guess.float(), measurement) + tv(estimate, opt_params['tv_reg'])+ opt_params['l2_reg']*torch.norm(estimate)
+
+        loss =  consistency +  1e-8 * sharpness
+
+        #print(str(iter) + ' consistency: ' + str(consistency.detach().cpu().numpy()) + ', sharpness: ' + str(-sharpness.detach().cpu().numpy()))
+
+        # backward
+        opt_est.zero_grad()
+        opt_coeff.zero_grad()
+        loss.backward()
+
+        #if est:
+        opt_est.step() 
+        #else:
+        opt_coeff.step() 
+
+        estimate.data[estimate.data < 0] = 0
+        estimate.data[estimate.data > 1] = 1
+        if iter % SWITCH_FREQ:
+            est = not est
+
+    # print(coeffs)
+    # util.show(estimate.detach().cpu())
+
+    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
+    return estimate.detach().cpu().numpy(), psfs_estimate.detach().cpu().numpy(), coeffs.detach().cpu().numpy()
 
 
 def wiener_torch(image, psf, balance=3e-4, reg=None, is_real=True, clip=True):

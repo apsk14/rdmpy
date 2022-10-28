@@ -12,7 +12,7 @@ import scipy
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
-INTERP_TYPE = 'bilinear'
+INTERP_TYPE = 'bicubic'
  
 
 def getCartesianPoints(r, theta, center):
@@ -54,9 +54,10 @@ def img2polar(img, numRadii=None, initialRadius=0, finalRadius=None, initialAngl
         maxRadius = np.ceil(radii.max()).astype(int)
         #=finalRadius = (np.sqrt(2) * ((img.shape[0]-1)/2))
         finalRadius = radii.max()
+        finalRadius = (img.shape[0]/2) * np.sqrt(2)
 
     
-    initialRadius = getPolarPoints(img.shape[0]//2,img.shape[0]//2, center)[0]
+    #initialRadius = getPolarPoints(img.shape[0]//2,img.shape[0]//2, center)[0]
 
     maxSize = np.max(img.shape)
     if numRadii is None:
@@ -65,14 +66,15 @@ def img2polar(img, numRadii=None, initialRadius=0, finalRadius=None, initialAngl
     initialAngle = np.pi/4
     finalAngle = 2*np.pi + np.pi/4
 
-    if maxSize > 500:
+    if maxSize > 700:
         numAngles = int(2 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi)))
     else:
         numAngles = int(4 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi)))
 
-    numAngles = int(5 * np.max(img.shape)) #- 4
+    #numAngles = int(4 * np.max(img.shape)) #- 4
 
-    radii = np.linspace(initialRadius, finalRadius, numRadii, endpoint=False)
+    radii = np.linspace(0, finalRadius, numRadii+1, endpoint=False)
+    radii = radii[1:]
     #radii = (np.sqrt(2)*(np.linspace(0, img.shape[0]/2, numRadii, endpoint=False) + 0.5))
     
     theta = np.linspace(initialAngle, finalAngle, numAngles, endpoint=False)
@@ -108,16 +110,20 @@ def polar2img(img, imageSize=None, initialRadius=0, finalRadius=None, initialAng
 
     initialAngle = np.pi/4
     finalAngle = 2*np.pi + np.pi/4
-    initialRadius = getPolarPoints(imageSize[0]//2,imageSize[1]//2, center)[0]
+    #initialRadius = getPolarPoints(imageSize[0]//2,imageSize[1]//2, center)[0]
+    
 
     if finalRadius is None:
         corners = np.array([[0, 0], [0, 1], [1, 0], [1, 1]]) * imageSize[-2:]
         radii, _ = getPolarPoints(corners[:, 1], corners[:, 0], center)
         finalRadius = np.ceil(radii.max()).astype(int)
         finalRadius = radii.max()
+        finalRadius = (imageSize[0]/2) * np.sqrt(2)
         #initialRadius = np.sqrt(2)/2
         #finalRadius = (np.sqrt(2) * ((imageSize[0]-1)/2))
     # This is used to scale the result of the radius to get the appropriate Cartesian value
+    radii = np.linspace(0, finalRadius, int(img.shape[1]+1), endpoint=False)
+    initialRadius = radii[1]  
     scaleRadius = img.shape[1] / (finalRadius - initialRadius)
 
     # This is used to scale the result of the angle to get the appropriate Cartesian value

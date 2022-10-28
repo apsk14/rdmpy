@@ -19,6 +19,7 @@ PLT_SIZE = 5
 
 #TODO: get diagonal list given non-square dimensions
 
+
 def write_video(path, array, fps=float(24)):
     fourcc = VideoWriter_fourcc(*'mp4v')
     video = VideoWriter(path, fourcc, fps, (array.shape[2], array.shape[1]), False)
@@ -34,29 +35,38 @@ def getSeidelList(sidelength, num_radii):
         diag_list += [((i*fraction),  -(i*fraction))]
     return diag_list
 
+def getSeidelRadii(sidelength, num_radii):
+    fraction = (sidelength/2)/num_radii
+    diag_list = []
+    for i in np.linspace(1, num_radii, num_radii, endpoint=False): #start was 0!
+        diag_list += [np.sqrt((i*fraction)**2 + (i*fraction)**2)]
+    return diag_list
 
-def get_calib_info(calib_image, center, desired_dim, min_distance, centered_psf=True):
+
+def get_calib_info(calib_image, dim, fit_params):
     psf = calib_image.copy()
     psf[psf < 0] = 0
     psf[psf < np.quantile(psf, 0.9)] = 0
-    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=min_distance, indices=True, threshold_rel=0)
-    distances = np.sqrt(np.sum(np.square(raw_coord - center), axis=1))
-    if centered_psf:
+    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=fit_params['min_distance'], indices=True, threshold_rel=0)
+    distances = np.sqrt(np.sum(np.square(raw_coord - fit_params['sys_center']), axis=1))
+    if fit_params['centered_psf']:
         center = raw_coord[np.argmin(distances), :]
+    else:
+        center = fit_params['sys_center']
 
-    calib_image = calib_image[center[0] - desired_dim[0] // 2:center[0] + desired_dim[0] // 2,
-          center[1] - desired_dim[1] // 2:center[1] + desired_dim[1] // 2]
+    calib_image = calib_image[center[0] - dim // 2:center[0] + dim // 2,
+          center[1] - dim // 2:center[1] + dim // 2]
 
     coord_list = []
     for i in range(raw_coord.shape[0]):
-        if np.abs(raw_coord[i, 1] - center[1]) < desired_dim[1] // 2 and np.abs(center[0] - raw_coord[i, 0]) < desired_dim[0] // 2:
+        if np.abs(raw_coord[i, 1] - center[1]) < dim // 2 and np.abs(center[0] - raw_coord[i, 0]) < dim // 2:
             coord_list += [(raw_coord[i, 1] - center[1], center[0] - raw_coord[i, 0])]
 
     calib_image[calib_image < 0] = 0
     calib_image[calib_image < np.quantile(calib_image, 0.9)] = 0
     calib_image = (calib_image / calib_image.sum()) * len(coord_list)
 
-    return coord_list, center, calib_image
+    return coord_list, calib_image
 
 
 

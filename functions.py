@@ -5,7 +5,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import torch
 import numpy as np
 import torch.fft as fft
-from _src import opt, seidel, lri_forward, util
+from _src import opt, seidel, forward, util
 import pdb
 
 '''
@@ -36,47 +36,64 @@ Returns:
 
     seidel_coeffs - (6 x 1) numpy array storing the 5 primary coefficients preceded by a defocus parameter. These coefficients were used to generate psf_stack_roft
 '''
-def calibrate(calib_image, desired_dim, num_psfs, seidel_coeffs=None, centered_psf=True, opt_params=None, min_distance=30, sys_params=None,   verbose=True, device=torch.device('cpu')):
-    # First step is to get the seidel coefficients by processing and fitting the calibration image
-    if sys_params is None:
-        # sys_params = {'samples': desired_dim, 'L': 7.33333333333 * 0.0003072, 'lamb': 0.510e-6,
-        #               'pupil_radius': 1e-3, 'z': 12.957e-3}
+def calibrate(calib_image, model, dim, num_psfs=0, seidel_coeffs=None, get_psfs=True, fit_params={}, sys_params={}, verbose=False, show_psfs=False, device=torch.device('cpu')):
 
-        sys_params = {'samples': desired_dim, 'L': 1e-3, 'lamb': 0.55e-6,
-                      'pupil_radius': 10e-3, 'z': 100e-3}
+    # default parameters which describe the optical system. These do not necessarily need to be correct---they just need to generate accurate PSFs
+    def_sys_params = {'samples': dim, 'L': 1e-3, 'lamb': 0.55e-6,
+                      'pupil_radius': ((dim) * (0.55e-6) * (100e-3))/(4*(1e-3)), 'z': 100e-3}
+    def_sys_params.update(sys_params)      
 
+    # If no seidel coefficients were provided we will our own set to the calibration image
+    if seidel_coeffs is None:
 
-    if seidel_coeffs is not None:
-        seidel_coeffs = torch.tensor(seidel_coeffs)
-    else:
-        # default parameters
-        if opt_params is None:
-            opt_params = {'iters': 1000, 'lr': 2e-3, 'reg': 0}
+        # parameters which are used for the seidel fitting procedure
+        def_fit_params = {'sys_center': [calib_image.shape[0]//2, calib_image.shape[1]//2], 'centered_psf': False, 'min_distance': 30, 
+                            'num_seidel': 3, 'init': 'zeros', 'iters': 300, 'lr': 1e-2, 'reg': 0, 'plot_loss': False}
+        def_fit_params.update(fit_params)      
 
-        center = [calib_image.shape[0]//2, calib_image.shape[1]//2]
-        psf_locations, center, calib_image = util.get_calib_info(calib_image, center, [desired_dim, desired_dim], min_distance=min_distance, centered_psf=centered_psf)  # going to be in (x,y) relative to center. Center will be row, col from top left of raw_image
+        # seperating out individual PSFs from the calibration image
+        psf_locations, calib_image = util.get_calib_info(calib_image, dim, def_fit_params)
 
-        '''Need to generalize this to multishot'''
+        # seidel fitting
         if verbose:
-            print('estimating seidel coefficients...')
-        seidel_coeffs = opt.estimate_coeffs_ss(calib_image, psf_locations, sys_params, opt_params, device)
+            print('fitting seidel coefficients...')
+        seidel_coeffs = opt.estimate_coeffs(calib_image, psf_list=psf_locations, sys_params=def_sys_params, fit_params=def_fit_params, show_psfs=show_psfs, device=device).detach()
+        if verbose:
+            print('Fitted seidel coefficients: ' + str(seidel_coeffs.detach().cpu()))
 
-    if verbose:
-        print(seidel_coeffs)
-    # Next, with seidel coefficients, we generate the radial line of PSFs needed for LRI operations
-    point_list = util.getSeidelList(desired_dim, num_psfs)
+    else:
+        seidel_coeffs = torch.tensor(seidel_coeffs)
 
-    if verbose:
-            print('computing radial stack of PSFs...')
-    psf_stack_roft = seidel.compute_psfs(seidel_coeffs.cpu(), point_list, sys_params, polar=True, verbose=verbose, stack=False)
-    psf_stack_roft = torch.stack(psf_stack_roft)
-    psf_stack_roft = fft.rfft(psf_stack_roft, dim=1).to(device)
+    
+    if get_psfs:
+        # Next, with seidel coefficients, we decide which PSFs we need depending on our method
+        if model == 'lsi':
+            point_list = [(0,0)] # just the center PSF
+        elif model == 'lri':
+            if num_psfs == 0:
+                num_psfs = dim
+            rs = np.linspace(0, (dim/2), num_psfs+1, endpoint=False, retstep=False)
+            rs = rs[1:] - 0.5
+            point_list = [(r , -r) for r in rs] # radial line of PSFs
+        else:
+            raise(NotImplementedError)
 
-    center_psf = seidel.get_center_psf(seidel_coeffs.cpu(), sys_params, polar=False, verbose=verbose, stack=False)
-    center_psf = center_psf.to(device)
+        if verbose:
+                print('computing radial stack of PSFs...')
+        psf_data = seidel.compute_psfs(seidel_coeffs.cpu(), point_list, def_sys_params, polar=(model=='lri'), verbose=verbose, stack=False)
+        
+        # prep the PSFs for outputing to the user
+        if model == 'lsi':
+            psf_data = psf_data[0].to(device)
+        if model == 'lri':
+            psf_data = torch.stack(psf_data)
+            psf_data = fft.rfft(psf_data, dim=1).to(device) # here we store the PSF ROFT to save computation time later.
 
-    return (center_psf, psf_stack_roft), seidel_coeffs
+        return seidel_coeffs, psf_data
 
+    else:
+        
+        return seidel_coeffs
 
 
 '''
@@ -99,17 +116,21 @@ Arguments:
 Returns
     blurred_image - (N x N) numpy array that is a blurred version of the object according to the PSFs from psf_stack_roft
 '''
-def blur(obj, psf_stack_roft, verbose=False, artifact_correction=0.5, device=torch.device('cpu')):
-    #diff image stuff
-    if artifact_correction:
-        constant = torch.ones(obj.shape, device=device)  * artifact_correction
-        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose, calib=True)
-        diff = constant - constant_response
-    else:
-        diff = None
-
+def blur(obj, psf_data, model, verbose=False, device=torch.device('cpu')):
+    
     obj = torch.from_numpy(obj).float().to(device)
-    return lri_forward.forward(obj, psf_stack_roft, method='normal', device=device, verbose=verbose, diff=diff)
+    if model == 'lsi':
+        if len(psf_data.shape) != 2: 
+            raise ValueError('There is a mismatch between model and psf_data, LSI needs a single PSF') 
+        img = forward.lsi(obj, psf_data)
+    elif model == 'lri':
+        if len(psf_data.shape) != 3:
+            raise ValueError('There is a mismatch between model and psf_data, LRI needs a radial stack of PSFs')
+        img,_ = forward.lri(obj, psf_data, method='normal', device=device, verbose=verbose)
+    else:
+        raise NotImplemented
+
+    return img
 
 
 
@@ -134,20 +155,60 @@ Arguments:
 Returns
     blurred_image - (N x N) numpy array that is a blurred version of the object according to the PSFs from psf_stack_roft
 '''
-def deblur(image, psf_stack_roft, opt_params=None, verbose=False, artifact_correction=0.5, device=torch.device('cpu')):
-    if artifact_correction:
-        constant = torch.ones(image.shape, device=device)  * artifact_correction
-        constant_response = lri_forward.forward(constant, psf_stack_roft, method='normal', device=device, verbose=verbose,  calib=True)
-        diff = constant - constant_response
-    else:
-        diff = None
-
-    if opt_params is None:
-        opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'crop': 0, 'reg': 1e-11, 'l2_reg': 0}
+def deblur(image, psf_data, model, opt_params={}, device=torch.device('cpu'), verbose=False):
     
+    if model != 'lri' and model != 'lsi':
+        raise NotImplementedError 
+    
+    if model == 'lsi' and len(psf_data.shape) != 2: 
+        raise ValueError('There is a mismatch between model and psf_data, LSI needs a single PSF') 
+
+    if model == 'lri' and len(psf_data.shape) != 3:
+        raise ValueError('There is a mismatch between model and psf_data, LRI needs a radial stack of PSFs')
+
+    def_opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'crop': 0, 'tv_reg': 1e-11, 'l2_reg': 0, 'plot_loss': False}
+    def_opt_params.update(opt_params)
+    
+    if not torch.is_tensor(image):
+        image = torch.tensor(image)
+    if image.device is not device:
+        image = image.to(device)
+
+
+    return opt.image_recon(image.float(), psf_data, model, opt_params=def_opt_params, device=device, verbose=verbose)
+
+
+'''
+Takes in a blurry image and the radial stack of PSF rotationally fourier transforms from the same system. Inverts the LRI forward model
+iteratively to return an estimation of the unblurred object/scene.
+
+Arguments:
+    image - (N x N) numpy array representing a blurry image that we would like to deblur
+
+    psf_stack_roft - (num_radii x N x N) torch tensor. Can be viewed as a num_radii stack of N x N images where each image is the rotationaly fourier transform of a PSF. The PSFs are ordered 
+    by increasing distance of their generating point source from the center. Can be gotten from calibrate.
+
+    verbose - Boolean (True or False). Determines if the code will output descriptive print statements.
+
+    artifact_correction - real number in (0,1). Mitigates image artifacts caused by discretizing the polar transformation. Costs a single
+    run of blur function. Works by subtracting the output of a constant object. Its value determines the strength of correction.
+
+    device - torch.device. Determines the device all quantities will be placed on. Will be cuda or cpu depending on if a GPU is being used.
+
+Returns
+    blurred_image - (N x N) numpy array that is a blurred version of the object according to the PSFs from psf_stack_roft
+'''
+def blind_deblur(image, opt_params={}, sys_params={}, verbose=False, device=torch.device('cpu')):
+    def_opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'seidel_init': None,  'crop': 0, 'tv_reg': 1e-11, 'l2_reg': 0, 'balance': 3e-4, 'plot_loss': False}
+    def_opt_params.update(opt_params)
+
+    def_sys_params = {'samples': image.shape[0], 'L': 1e-3, 'lamb': 0.55e-6,
+                      'pupil_radius': ((image.shape[0]) * (0.55e-6) * (100e-3))/(4*(1e-3)), 'z': 100e-3}
+    def_sys_params.update(sys_params)  
+
     if not torch.is_tensor(image):
         image = torch.tensor(image).float()
     if image.device is not device:
         image = image.to(device)
 
-    return opt.image_recon(image, psf_stack_roft, opt_params, diff, device)
+    return opt.blind_recon(image, opt_params=def_opt_params, sys_params=def_sys_params, device=device)

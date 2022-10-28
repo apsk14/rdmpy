@@ -11,6 +11,7 @@ import csv
 from tqdm import tqdm
 import scipy as sp
 from . import util, polar_transform
+#from . import pt_old as polar_transform
 from bisect import bisect
 from scipy.ndimage import shift
 import numpy as np
@@ -35,9 +36,9 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
     Y_rot = -X*torch.sin(rot_angle) + Y*torch.cos(rot_angle)
 
     pupil_radii = torch.square(X_rot) + torch.square(Y_rot)
-    pupil_phase = coeffs[0]*pupil_radii + coeffs[1]*torch.square(pupil_radii) \
-                 + coeffs[2]*obj_rad*pupil_radii*X_rot + coeffs[3]*(obj_rad**2)*torch.square(X_rot) \
-                 + coeffs[4]*(obj_rad**2)*pupil_radii + coeffs[5]*(obj_rad**3)*X_rot
+    pupil_phase =  coeffs[0]*torch.square(pupil_radii) \
+                 + coeffs[1]*obj_rad*pupil_radii*X_rot + coeffs[2]*(obj_rad**2)*torch.square(X_rot) \
+                 + coeffs[3]*(obj_rad**2)*pupil_radii + coeffs[4]*(obj_rad**3)*X_rot + coeffs[5]*pupil_radii 
 
     return pupil_phase
 
@@ -54,6 +55,7 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
     z = sys_params['z']
     # f_number = z/(2*pupil_radius)
     # cutoff_freq = 1/(lamb * f_number
+    #pupil_radius = (samples * lamb * z)/(4*L) #pick pupil size according to nyquist
     fx = np.linspace(-1 / (2 * dt), 1 / (2 * dt), samples)
     [Fx, Fy] = torch.tensor(np.meshgrid(fx, fx), device=device)
     scale_factor = ((lamb * z) / pupil_radius)
@@ -87,11 +89,11 @@ def compute_psfs(coeffs, desired_list, sys_params, device=torch.device('cpu'), p
 
         #curr_psf = curr_psf[int(samples / 2):-int(samples / 2), int(samples / 2):-int(samples / 2)]
 
-        curr_psf[curr_psf < curr_psf.quantile(0.9)] = 0
+        #curr_psf[curr_psf < curr_psf.quantile(0.9)] = 0
         curr_psf = curr_psf / curr_psf.sum()
 
         if polar:
-            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii, ispsf=True)
+            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
             #curr_psf = curr_psf/curr_psf.sum()
         if stack:
             desired_psfs[idx, :, :] = curr_psf
@@ -179,64 +181,6 @@ def generate_psf_dataset(path, sys_params, coeffs, type='grid'):
         writer = csv.writer(csv_file)
         for key, value in data_dict.items():
             writer.writerow([key, value])
-
-
-
-def estimate_coeffs(psf_data, sys_params, opt_params, std_init='random', init=None, plot=False, device=torch.device('cpu')):
-
-    cache_path = dirname + '/data/.cache/'
-    half_length = sys_params['L'] / 2
-    psf_list = [(torch.tensor(i[0], device=device).float(), torch.tensor(i[1], device=device).float()) for i in psf_data[0]]
-    psfs_gt = torch.stack([torch.tensor(psf, device=device).float() for psf in psf_data[1]], dim=0)
-    if init is None:
-        if std_init == 'zeros':
-            coeffs = torch.zeros((3, 1), device=device)
-        elif std_init == 'random':
-            coeffs = torch.rand((3, 1), device=device)
-        else:
-            raise NotImplemented
-    else:
-        coeffs = torch.tensor(init, device=device).float()
-
-    coeffs.requires_grad = True
-
-    optimizer = torch.optim.Adam([coeffs], lr=opt_params['lr'])
-    #optimizer = torch.optim.SGD([coeffs], lr=opt_params['lr'])
-    l1_loss_fn = torch.nn.L1Loss()
-    l2_loss_fn = torch.nn.MSELoss()
-    smooth_l1 = torch.nn.SmoothL1Loss()
-    fig = plt.figure()
-    camera = Camera(fig)
-    crop = 225
-
-    for iter in range(opt_params['iters']):
-        # forward pass
-        psfs_estimate, pupils = compute_psfs(torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device) )), desired_list=psf_list, sys_params=sys_params, device=coeffs.device)\
-        # loss
-        loss = l2_loss_fn(torch.stack(psfs_estimate, dim=0).float(), psfs_gt) + opt_params['reg']*l2_loss_fn(coeffs, -coeffs)
-        # loss = loss_fn((measurement[:,:350]), (measurement_guess[:,:350])) #+ tv(estimate, 1e-9)
-        print(iter, loss.item())
-
-        # backward
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-
-    print(coeffs)
-    if plot:
-        for gt, psf, pupil in zip(psfs_gt, psfs_estimate, pupils):
-            #pdb.set_trace()
-            util.show(torch.cat((gt/gt.max(), psf/psf.max()), dim=1).detach())
-            util.show(psf.detach())
-            plt.figure()
-            plt.imshow(unwrap(torch.angle(pupil).detach()))
-            plt.colorbar()
-            plt.show()
-
-
-    #torch.save(psfs_estimate[0], cache_path+'psf_fit.pt')
-    return torch.cat((torch.zeros(1, 1, device=device), coeffs, torch.zeros(2, 1, device=device)), ).detach()
 
 
 
