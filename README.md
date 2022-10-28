@@ -19,20 +19,20 @@ There are 3 main functions of interest in this package. They can all be found in
 
 Here we pass in either a calibration image such as ```test_images/calibration_image.tif``` or Seidel aberration coefficients (i.e., [sphere, astigmatism, coma, field curvature, distortion]). We get back a stack of the rotational fourier transforms (see paper appendix E) of PSFs along a radial line and the Seidel coefficients.
 ```
-psf_stack_roft, seidel_coeffs = calibrate(calib_image, dimension, num_psfs, seidel_coeffs)
+seidel_coeffs, psf_stack = calibrate(calib_image, model, dim, seidel_coeffs=None)
 ```
 **2a) blur**
 
 With PSFs in hand we can simulate the blurring of an imaging system using the LRI forward model. We simply pass in a test object such as ```test_images/baboon.png``` and our PSF stack obtained from the calibration step.
 ```
-blurred_image = blur(object, psf_stack_roft)
+blurred_image = blur(object, psf_stack, model)
 ```
 
 **2b) deblur**
 
 Alternatively we can choose to invert the LRI forward model to instead perform image deblurring. Again we only need the PSF stack from step 1 in addition to the blurry image we would like to deblur.
 ```
-deblurred_image = deblur(blurred_image, psf_stack_roft)
+deblurred_image = deblur(blurred_image, psf_stack, model)
 ```
 
 
