@@ -13,7 +13,7 @@ This repository is still in early stages and will constantly be updated with new
 
 For a quick example of the basic utility of this package please see ```simple_example.ipynb```. For a more in-depth overview and some real-life data see ```example.ipynb```. For full documentation of each function see ```functions.py```.
 
-There are 3 main functions of interest in this package. They can all be found in ```functions.py```:
+There are 3 main functions of interest in this package. They can all be found in ```functions.py```. Each function can be run using the LRI (linear revolution invariant) or LSI (linear shift-invariant) assumption. This is specified by the ```model``` parameter which is either 'lri' or 'lsi'
 
 **1) calibrate**
 
