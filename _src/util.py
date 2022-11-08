@@ -47,7 +47,7 @@ def get_calib_info(calib_image, dim, fit_params):
     psf = calib_image.copy()
     psf[psf < 0] = 0
     psf[psf < np.quantile(psf, 0.9)] = 0
-    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=fit_params['min_distance'], indices=True, threshold_rel=0)
+    raw_coord = corner_peaks(erosion(psf, disk(2)), min_distance=fit_params['min_distance'], indices=True, threshold_rel=fit_params['threshold'])
     distances = np.sqrt(np.sum(np.square(raw_coord - fit_params['sys_center']), axis=1))
     if fit_params['centered_psf']:
         center = raw_coord[np.argmin(distances), :]

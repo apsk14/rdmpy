@@ -47,7 +47,7 @@ def calibrate(calib_image, model, dim, num_psfs=0, seidel_coeffs=None, get_psfs=
     if seidel_coeffs is None:
 
         # parameters which are used for the seidel fitting procedure
-        def_fit_params = {'sys_center': [calib_image.shape[0]//2, calib_image.shape[1]//2], 'centered_psf': False, 'min_distance': 30, 
+        def_fit_params = {'sys_center': [calib_image.shape[0]//2, calib_image.shape[1]//2], 'centered_psf': False, 'min_distance': 30, 'threshold': 0.2, 
                             'num_seidel': 3, 'init': 'zeros', 'iters': 300, 'lr': 1e-2, 'reg': 0, 'plot_loss': False}
         def_fit_params.update(fit_params)      
 
