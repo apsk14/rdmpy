@@ -26,12 +26,15 @@ dirname = str(pathlib.Path(__file__).parent.absolute())
 def estimate_coeffs(calib_image, psf_list, sys_params, fit_params, device, show_psfs=False):
 
     psfs_gt = torch.tensor(calib_image, device=device).float()
-    if fit_params['init'] == 'zeros':
-            coeffs = torch.zeros((fit_params['num_seidel'], 1), device=device)
-    elif fit_params['init'] == 'random':
-            coeffs = torch.rand((fit_params['num_seidel'], 1), device=device)
+    if fit_params['seidel_init'] is not None:
+        coeffs = torch.tensor(fit_params['seidel_init'], device=device)
     else:
-        raise NotImplemented
+        if fit_params['init'] == 'zeros':
+                coeffs = torch.zeros((fit_params['num_seidel'], 1), device=device)
+        elif fit_params['init'] == 'random':
+                coeffs = torch.rand((fit_params['num_seidel'], 1), device=device)
+        else:
+            raise NotImplemented
 
     coeffs.requires_grad = True
 
@@ -61,12 +64,16 @@ def estimate_coeffs(calib_image, psf_list, sys_params, fit_params, device, show_
     if show_psfs:
         psf_est = sum(psfs_estimate)/(len(psfs_estimate))
         
-        plt.subplot(1,2,1)
-        plt.imshow(psf_est.detach().cpu())
+        plt.subplot(1,2,2)
+        plt.tight_layout()
+        plt.axis('off')
+        plt.imshow(psf_est.detach().cpu(), cmap='inferno')
         plt.gca().set_title('Seidel PSFs')
 
-        plt.subplot(1,2,2)
-        plt.imshow(psfs_gt.detach().cpu())
+        plt.subplot(1,2,1)
+        plt.tight_layout()
+        plt.axis('off')
+        plt.imshow(psfs_gt.detach().cpu(), cmap='inferno')
         plt.gca().set_title('Measured PSFs')
 
     if fit_params['plot_loss']:
@@ -154,7 +161,7 @@ def image_recon(measurement, psf_data, model, opt_params, device, verbose=False,
                 loss = loss_fn((measurement_guess)[crop:-crop, crop:-crop], (measurement)[crop:-crop, crop:-crop]) + \
                     tv(estimate[crop:-crop, crop:-crop], opt_params['tv_reg']) + torch.norm(reg_vec*obj)
             else:
-                loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['tv_reg']) #+ torch.norm(reg_vec*obj)
+                loss = loss_fn(measurement_guess, measurement) + tv(estimate, opt_params['tv_reg']) + torch.norm(reg_vec*obj)
 
         if opt_params['plot_loss']:
             losses += [loss.detach().cpu()]

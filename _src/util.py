@@ -156,6 +156,7 @@ def plot_mult(I, cmap='gray', path='', show=True):
 def show(I):
     plt.figure()
     plt.imshow(I, cmap='gray')
+    plt.axis('off')
     plt.show()
 
 def error_map(img, gt, path, display=False, cmap='magma'):
@@ -260,3 +261,14 @@ def shift_torch(img, shift, mode='bilinear'):
     grid = torch.tensor(np.concatenate((gx[:,:,None], gy[:,:,None]), axis=2), device=img.device)
 
     return grid_sample(img[None, None,:,:].float(), grid[None,:,:].float(), padding_mode='zeros', mode=mode, align_corners=True).squeeze()
+
+def crop_pad(img, dim):
+    # crop
+    if img.shape[0] > dim:
+        img = center_crop(img, (dim,dim))
+    # pad
+    elif img.shape[0] < dim:
+        pad_length = (dim - img.shape[0])//2
+        img = np.pad(img, ((pad_length, pad_length),(pad_length, pad_length)))
+
+    return img
