@@ -272,3 +272,16 @@ def crop_pad(img, dim):
         img = np.pad(img, ((pad_length, pad_length),(pad_length, pad_length)))
 
     return img
+
+def process(test, back, dim, center=None):
+    if center is None:
+        center = (dim[0]//2, dim[1]//2)
+    test = test - back
+    test[test < 0] = 0
+    test_image = test[center[0] - dim[0] // 2:center[0] + dim[0] // 2,
+    center[1] - dim[1] // 2:center[1] + dim[1] // 2]
+
+    test_image = test_image - test_image.min()
+    test_image = (test_image/test_image.max())
+
+    return test_image
