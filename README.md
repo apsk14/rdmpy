@@ -20,6 +20,7 @@ For a quick example of the basic utility of this package please see ```simple_ex
 There are 4 main functions of interest in this package. They can all be found in ```functions.py```. Each function can be run using the LRI (linear revolution invariant) or LSI (linear shift-invariant) assumption. This is specified by the ```model``` parameter which is either 'lri' or 'lsi'
 
 **1) blind_deblur**
+
 If no PSFs are available, one can simply pass their blurry image into blind_deblur to get a deblurred estimate. 
 ```
 deblurred_image, psf_estimate, seidel_coeffs = blind_deblur(blurred_image)
