@@ -14,7 +14,7 @@ from . import util, forward, seidel
 from skimage.restoration import unwrap_phase as unwrap
 import torch.fft as fft
 from tqdm import tqdm
-import kornia
+from kornia.filters.sobel import spatial_gradient
 
 import pdb
 import torch
@@ -203,7 +203,7 @@ def blind_recon(measurement, opt_params, sys_params, device=torch.device('cpu'))
         recon = (recon/2)+0.5 # back-scale
 
         # loss (maximizing acutance)
-        loss = -torch.mean(torch.abs(kornia.spatial_gradient(recon[None, None, :, :], mode='diff')))
+        loss = -torch.mean(torch.abs(spatial_gradient(recon[None, None, :, :], mode='diff')))
         if opt_params['plot_loss']:
             losses += [loss.detach().cpu()]
 

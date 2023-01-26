@@ -54,6 +54,23 @@ def get_calib_info(calib_image, dim, fit_params):
     else:
         center = fit_params['sys_center']
 
+    if dim//2 > center[0]:
+        PAD = (dim//2 - center[0])
+        calib_image = np.pad(calib_image, ((PAD,0), (0,0)))
+        center[0] += PAD
+    if dim//2 > center[1]:
+        PAD = (dim//2 - center[1])
+        calib_image = np.pad(calib_image, ((0,0), (PAD,0)))
+        center[1] += PAD
+    if dim//2 + center[0] >= calib_image.shape[0]:
+        PAD = dim//2 + center[0] - calib_image.shape[0] + 1
+        calib_image = np.pad(calib_image, ((0,PAD), (0,0)))
+        center[0] -= PAD
+    if dim//2 + center[1] >= calib_image.shape[1]:
+        PAD = dim//2 + center[1] - calib_image.shape[1] + 1
+        calib_image = np.pad(calib_image, ((0,0), (0,PAD)))
+        center[1] -= PAD
+
     calib_image = calib_image[center[0] - dim // 2:center[0] + dim // 2,
           center[1] - dim // 2:center[1] + dim // 2]
 
@@ -212,7 +229,7 @@ def process(test, back, center, dim):
     center[1] - dim[1] // 2:center[1] + dim[1] // 2]
 
     test_image = test_image - test_image.min()
-    test_image = (test_image/test_image.max())*0.90
+    test_image = (test_image/test_image.max())#*0.90
 
     return test_image
 

@@ -199,11 +199,11 @@ Returns
     blurred_image - (N x N) numpy array that is a blurred version of the object according to the PSFs from psf_stack_roft
 '''
 def blind_deblur(image, opt_params={}, sys_params={}, verbose=False, device=torch.device('cpu')):
-    def_opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'seidel_init': None,  'crop': 0, 'tv_reg': 1e-11, 'l2_reg': 0, 'balance': 3e-4, 'plot_loss': False}
+    def_opt_params = {'iters': 100, 'optimizer': 'adam', 'lr': 7.5e-2, 'init': 'measurement', 'seidel_init': None,  'crop': 0, 'tv_reg': 0, 'l2_reg': 0, 'balance': 3e-4, 'plot_loss': False}
     def_opt_params.update(opt_params)
 
-    def_sys_params = {'samples': image.shape[0], 'L': 1e-3, 'lamb': 0.55e-6,
-                      'pupil_radius': ((image.shape[0]) * (0.55e-6) * (100e-3))/(4*(1e-3)), 'z': 100e-3}
+    def_sys_params = {'samples': min(image.shape), 'L': 1e-3, 'lamb': 0.55e-6,
+                      'pupil_radius': ((min(image.shape)) * (0.55e-6) * (100e-3))/(4*(1e-3)), 'z': 100e-3}
     def_sys_params.update(sys_params)  
 
     if not torch.is_tensor(image):
