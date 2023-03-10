@@ -199,8 +199,8 @@ if __name__ == "__main__":
     #                             padding_mode='reflection').squeeze().permute(1, 2, 0)
 
     #Read in image and convert to tensor for ground truth
-    Im = rgb2gray(plt.imread('../data/test_images/baboon.png'))
-    Im = cv2.resize(Im, dsize=(384, 384))
+    Im = (plt.imread('baboon.png'))
+    #Im = cv2.resize(Im, dsize=(384, 384))
     Im = torch.Tensor(Im)
     Im /= Im.sum()
 
