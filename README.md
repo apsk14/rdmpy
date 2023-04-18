@@ -3,7 +3,10 @@
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
-* Just added blind_deblur() to functions.py which allows for blind deblurring (no PSF needed!)
+* [April 18th 2023] Updated to LRI v3! Changes include...
+** Fixed LRI scaling issues.
+** Added padded_lsi for true linear convolutions.
+** Added full_deblur which implements the full linear blur (no assumptions) with every PSF.
 
 
 ## Background
