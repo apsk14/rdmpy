@@ -1,4 +1,3 @@
-
 import numpy as np
 import pdb
 import torch
@@ -12,8 +11,8 @@ import scipy
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
-INTERP_TYPE = 'bicubic'
- 
+INTERP_TYPE = "bicubic"
+
 
 def getCartesianPoints(r, theta, center):
     """ Convert list of polar points to cartesian points """
@@ -38,45 +37,57 @@ def getPolarPoints(x, y, center):
 
     return r, theta
 
-def img2polar(img, numRadii=None, initialRadius=0, finalRadius=None, initialAngle=0, finalAngle=np.pi*2, center=None, border='constant', ispsf=False):
+
+def img2polar(
+    img,
+    numRadii=None,
+    initialRadius=0,
+    finalRadius=None,
+    initialAngle=0,
+    finalAngle=np.pi * 2,
+    center=None,
+    border="constant",
+    ispsf=False,
+):
     # if ispsf:
     #     INTERP_TYPE = 'bicubic'
     # else:
     #     INTERP_TYPE = 'bicubic'
-    
-    if center == None:
-        center = (np.array(img.shape[-1:-3:-1])-1) / 2.0
 
+    if center == None:
+        center = (np.array(img.shape[-1:-3:-1]) - 1) / 2.0
 
     if finalRadius is None:
         corners = np.array([[0, 0], [0, 1], [1, 0], [1, 1]]) * img.shape[-2:]
         radii, _ = getPolarPoints(corners[:, 1], corners[:, 0], center)
         maxRadius = np.ceil(radii.max()).astype(int)
-        #=finalRadius = (np.sqrt(2) * ((img.shape[0]-1)/2))
+        # =finalRadius = (np.sqrt(2) * ((img.shape[0]-1)/2))
         finalRadius = radii.max()
-        finalRadius = (img.shape[0]/2) * np.sqrt(2)
+        finalRadius = (img.shape[0] / 2) * np.sqrt(2)
 
-    
-    #initialRadius = getPolarPoints(img.shape[0]//2,img.shape[0]//2, center)[0]
+    # initialRadius = getPolarPoints(img.shape[0]//2,img.shape[0]//2, center)[0]
 
     maxSize = np.max(img.shape)
     if numRadii is None:
         numRadii = maxSize
-    
-    initialAngle = np.pi/4
-    finalAngle = 2*np.pi + np.pi/4
+
+    initialAngle = np.pi / 4
+    finalAngle = 2 * np.pi + np.pi / 4
 
     if maxSize > 700:
-        numAngles = int(2 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi)))
+        numAngles = int(
+            2 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
+        )
     else:
-        numAngles = int(4 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi)))
+        numAngles = int(
+            4 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
+        )
 
-    #numAngles = int(4 * np.max(img.shape)) #- 4
+    radii = np.sqrt(2) * (
+        np.linspace(0, (img.shape[0] / 2), numRadii, endpoint=False, retstep=False)
+        + 0.5
+    )
 
-    radii = np.linspace(0, finalRadius, numRadii+1, endpoint=False)
-    radii = radii[1:]
-    #radii = (np.sqrt(2)*(np.linspace(0, img.shape[0]/2, numRadii, endpoint=False) + 0.5))
-    
     theta = np.linspace(initialAngle, finalAngle, numAngles, endpoint=False)
     r, theta = np.meshgrid(radii, theta)
 
@@ -85,45 +96,63 @@ def img2polar(img, numRadii=None, initialRadius=0, finalRadius=None, initialAngl
     image = img.reshape((-1,) + img.shape)
 
     pad = 3
-    if border == 'constant':
+    if border == "constant":
         # Pad image by 3 pixels and then offset all of the desired coordinates by 3
-        image = fun.pad(image[None, :], (pad, pad, pad, pad), 'replicate')[0,:,:,:]
+        image = fun.pad(image[None, :], (pad, pad, pad, pad), "replicate")[0, :, :, :]
         xCartesian += pad
         yCartesian += pad
 
-    gx = 2.0 * (xCartesian / (image.shape[2] - 1)) - 1.
-    gy = 2.0 * (yCartesian / (image.shape[1] - 1)) - 1.
-    desiredCoords = torch.from_numpy(np.stack((gx, gy), 2)).unsqueeze(0).to(device=img.device)
+    gx = 2.0 * (xCartesian / (image.shape[2] - 1)) - 1.0
+    gy = 2.0 * (yCartesian / (image.shape[1] - 1)) - 1.0
+    desiredCoords = (
+        torch.from_numpy(np.stack((gx, gy), 2)).unsqueeze(0).to(device=img.device)
+    )
 
-    polarImage = fun.grid_sample(image[None,:], desiredCoords.float(), padding_mode='zeros', mode=INTERP_TYPE, align_corners=True)
+    polarImage = fun.grid_sample(
+        image[None, :],
+        desiredCoords.float(),
+        padding_mode="zeros",
+        mode=INTERP_TYPE,
+        align_corners=True,
+    )
     polarImage = polarImage.squeeze()
 
     return polarImage
 
-def polar2img(img, imageSize=None, initialRadius=0, finalRadius=None, initialAngle=0, finalAngle=np.pi*2, center=None, border='constant', ispsf=False):
+
+def polar2img(
+    img,
+    imageSize=None,
+    initialRadius=0,
+    finalRadius=None,
+    initialAngle=0,
+    finalAngle=np.pi * 2,
+    center=None,
+    border="constant",
+    ispsf=False,
+):
     # if ispsf:
     #     INTERP_TYPE = 'bicubic'
     # else:
     #     INTERP_TYPE = 'bicubic'
     if center == None:
-        center = ((imageSize[0]-1)/2.0, (imageSize[1]-1)/2.0)
+        center = ((imageSize[0] - 1) / 2.0, (imageSize[1] - 1) / 2.0)
 
-    initialAngle = np.pi/4
-    finalAngle = 2*np.pi + np.pi/4
-    #initialRadius = getPolarPoints(imageSize[0]//2,imageSize[1]//2, center)[0]
-    
+    initialAngle = np.pi / 4
+    finalAngle = 2 * np.pi + np.pi / 4
+    # initialRadius = getPolarPoints(imageSize[0]//2,imageSize[1]//2, center)[0]
 
     if finalRadius is None:
         corners = np.array([[0, 0], [0, 1], [1, 0], [1, 1]]) * imageSize[-2:]
         radii, _ = getPolarPoints(corners[:, 1], corners[:, 0], center)
-        finalRadius = np.ceil(radii.max()).astype(int)
-        finalRadius = radii.max()
-        finalRadius = (imageSize[0]/2) * np.sqrt(2)
-        #initialRadius = np.sqrt(2)/2
-        #finalRadius = (np.sqrt(2) * ((imageSize[0]-1)/2))
+
     # This is used to scale the result of the radius to get the appropriate Cartesian value
-    radii = np.linspace(0, finalRadius, int(img.shape[1]+1), endpoint=False)
-    initialRadius = radii[1]  
+    radii = np.sqrt(2) * (
+        np.linspace(0, (imageSize[0] / 2), img.shape[1], endpoint=False, retstep=False)
+        + 0.5
+    )
+    initialRadius = radii[0]
+    finalRadius = radii[-1]
     scaleRadius = img.shape[1] / (finalRadius - initialRadius)
 
     # This is used to scale the result of the angle to get the appropriate Cartesian value
@@ -133,7 +162,6 @@ def polar2img(img, imageSize=None, initialRadius=0, finalRadius=None, initialAng
     xs = np.arange(0, imageSize[1])
     ys = np.arange(0, imageSize[0])
     x, y = np.meshgrid(xs, ys)
-
 
     # Take cartesian grid and convert to polar coordinates
     r, theta = getPolarPoints(x, y, center)
@@ -157,21 +185,29 @@ def polar2img(img, imageSize=None, initialRadius=0, finalRadius=None, initialAng
 
     pad = 3
 
-    if border == 'constant':
+    if border == "constant":
         # Pad image by 3 pixels and then offset all of the desired coordinates by 3
-        image = fun.pad(image[None, :], (pad, pad, pad, pad), 'replicate')[0,:,:,:]
+        image = fun.pad(image[None, :], (pad, pad, pad, pad), "replicate")[0, :, :, :]
         r += pad
         theta += pad
 
+    gr = 2.0 * (r / (image.shape[2] - 1)) - 1.0
+    gtheta = 2.0 * (theta / (image.shape[1] - 1)) - 1.0
+    desiredCoords = (
+        torch.from_numpy(np.stack((gr, gtheta), 2)).unsqueeze(0).to(device=img.device)
+    )
 
-    gr = 2.0 * (r / (image.shape[2] - 1)) - 1.
-    gtheta = 2.0 * (theta / (image.shape[1] - 1)) - 1.
-    desiredCoords = torch.from_numpy(np.stack((gr, gtheta), 2)).unsqueeze(0).to(device=img.device)
-
-    cartImage = fun.grid_sample(image[None,:], desiredCoords.float(), padding_mode='zeros', mode=INTERP_TYPE, align_corners=True)
+    cartImage = fun.grid_sample(
+        image[None, :],
+        desiredCoords.float(),
+        padding_mode="zeros",
+        mode=INTERP_TYPE,
+        align_corners=True,
+    )
     cartImage = cartImage.squeeze()
-    cartImage[cartImage<0]= 0
+    # cartImage[cartImage < 0] = 0
     return cartImage
+
 
 if __name__ == "__main__":
 
@@ -198,17 +234,17 @@ if __name__ == "__main__":
     # torch_out = fun.grid_sample(torch_im, torch_grid, mode='bilinear', align_corners=False,
     #                             padding_mode='reflection').squeeze().permute(1, 2, 0)
 
-    #Read in image and convert to tensor for ground truth
-    Im = rgb2gray(plt.imread('../data/test_images/baboon.png'))
+    # Read in image and convert to tensor for ground truth
+    Im = rgb2gray(plt.imread("../data/test_images/baboon.png"))
     Im = cv2.resize(Im, dsize=(384, 384))
     Im = torch.Tensor(Im)
     Im /= Im.sum()
 
-    #make copy to feed in for the forward pass
+    # make copy to feed in for the forward pass
     I = Im.detach().clone()
     print(f"sum_before: {I.sum()}")
     I.requires_grad = True
-    #po, settings = pt.convertToPolarImage(I.detach().numpy(), order=1, border='constant')  # theirs
+    # po, settings = pt.convertToPolarImage(I.detach().numpy(), order=1, border='constant')  # theirs
     pot = img2polar(I)
 
     util.plot(pot.detach())
