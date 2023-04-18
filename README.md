@@ -4,9 +4,9 @@
 
 ## UPDATES:
 * [April 18th 2023] Updated to LRI v3! Changes include...
-** Fixed LRI scaling issues.
-** Added padded_lsi for true linear convolutions.
-** Added full_deblur which implements the full linear blur (no assumptions) with every PSF.
+  *Fixed LRI scaling issues.
+  * Added padded_lsi for true linear convolutions.
+  * Added full_deblur which implements the full linear blur (no assumptions) with every PSF.
 
 
 ## Background
