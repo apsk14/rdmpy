@@ -35,7 +35,7 @@ import pdb
 def compute_pupil_phase(coeffs, X, Y, u, v):
     #  first rotate grid as needed
     rot_angle = torch.atan2(v, u)
-    obj_rad = torch.sqrt(u ** 2 + v ** 2)
+    obj_rad = torch.sqrt(u**2 + v**2)
     X_rot = X * torch.cos(rot_angle) + Y * torch.sin(rot_angle)
     Y_rot = -X * torch.sin(rot_angle) + Y * torch.cos(rot_angle)
 
@@ -43,9 +43,9 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
     pupil_phase = (
         coeffs[0] * torch.square(pupil_radii)
         + coeffs[1] * obj_rad * pupil_radii * X_rot
-        + coeffs[2] * (obj_rad ** 2) * torch.square(X_rot)
-        + coeffs[3] * (obj_rad ** 2) * pupil_radii
-        + coeffs[4] * (obj_rad ** 3) * X_rot
+        + coeffs[2] * (obj_rad**2) * torch.square(X_rot)
+        + coeffs[3] * (obj_rad**2) * pupil_radii
+        + coeffs[4] * (obj_rad**3) * X_rot
         + coeffs[5] * pupil_radii
     )
 
@@ -55,12 +55,28 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
 def compute_psfs(
     coeffs,
     desired_list,
-    sys_params,
+    dim=None,
+    sys_params={},
     device=torch.device("cpu"),
     polar=False,
     verbose=False,
     stack=False,
 ):
+    if dim is None and sys_params == {}:
+        raise NotImplementedError
+    if dim is None:
+        dim = sys_params["samples"]
+    else:
+        def_sys_params = {
+            "samples": dim,
+            "L": 1e-3,
+            "lamb": 0.55e-6,
+            "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
+            "z": 100e-3,
+        }
+
+        def_sys_params.update(sys_params)
+        sys_params = def_sys_params
     num_radii = len(desired_list)
     desired_list = [
         (
@@ -113,6 +129,7 @@ def compute_psfs(
         H[circle < 1e-12] = 0
         # pdb.set_trace()
         curr_psf = torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(H)))
+        del H
         # curr_psf = torch.roll(coherent_psf, shifts=(-coherent_psf.shape[0] // 2, -coherent_psf.shape[1] // 2),
         # dims=(0, 1))
         curr_psf = torch.square(torch.abs(curr_psf))
@@ -172,7 +189,6 @@ def get_center_psf(
 
 
 def generate_psf_dataset(path, sys_params, coeffs, type="grid"):
-
     coeffs = torch.tensor(coeffs).float()
     samples = sys_params["samples"]
     dt = sys_params["L"] / sys_params["samples"]
@@ -300,8 +316,7 @@ def circ(r, radius):
 
 
 def main():
-
-    """ testing compute_pupil_phase"""
+    """testing compute_pupil_phase"""
     # u = 1; v = 0
     # coeffs = [0, 1, 1, 1, 0, 0]
     # x = np.linspace(-1,1,1000)

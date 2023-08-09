@@ -6,7 +6,9 @@ import torch.nn.functional as fun
 import cv2
 import matplotlib.pyplot as plt
 from skimage.color import rgb2gray
-from . import util
+
+# from . import util
+import util
 import scipy
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
@@ -15,7 +17,7 @@ INTERP_TYPE = "bicubic"
 
 
 def getCartesianPoints(r, theta, center):
-    """ Convert list of polar points to cartesian points """
+    """Convert list of polar points to cartesian points"""
     x = r * np.cos(theta) + center[0]
     y = r * np.sin(theta) + center[1]
 
@@ -26,7 +28,7 @@ def getPolarPoints(x, y, center):
     """Convert list of cartesian points to polar points"""
     cX, cY = x - center[0], y - center[1]
 
-    r = np.sqrt(cX ** 2 + cY ** 2)
+    r = np.sqrt(cX**2 + cY**2)
 
     theta = np.arctan2(cY, cX)
 
@@ -84,7 +86,7 @@ def img2polar(
         )
 
     radii = np.sqrt(2) * (
-        np.linspace(0, (img.shape[0] / 2), numRadii, endpoint=False, retstep=False)
+        np.linspace(0, (img.shape[-2] / 2), numRadii, endpoint=False, retstep=False)
         + 0.5
     )
 
@@ -93,7 +95,10 @@ def img2polar(
 
     xCartesian, yCartesian = getCartesianPoints(r, theta, center)
     # Reshape the image to be 3D, flattens the array if > 3D otherwise it makes it 3D with the 3rd dimension a size of 1
-    image = img.reshape((-1,) + img.shape)
+    if len(img.shape) < 3:
+        image = img.reshape((-1,) + img.shape)
+    else:
+        image = img
 
     pad = 3
     if border == "constant":
@@ -136,7 +141,7 @@ def polar2img(
     # else:
     #     INTERP_TYPE = 'bicubic'
     if center == None:
-        center = ((imageSize[0] - 1) / 2.0, (imageSize[1] - 1) / 2.0)
+        center = ((imageSize[-2] - 1) / 2.0, (imageSize[-1] - 1) / 2.0)
 
     initialAngle = np.pi / 4
     finalAngle = 2 * np.pi + np.pi / 4
@@ -148,19 +153,21 @@ def polar2img(
 
     # This is used to scale the result of the radius to get the appropriate Cartesian value
     radii = np.sqrt(2) * (
-        np.linspace(0, (imageSize[0] / 2), img.shape[1], endpoint=False, retstep=False)
+        np.linspace(
+            0, (imageSize[-2] / 2), img.shape[-1], endpoint=False, retstep=False
+        )
         + 0.5
     )
     initialRadius = radii[0]
     finalRadius = radii[-1]
-    scaleRadius = img.shape[1] / (finalRadius - initialRadius)
+    scaleRadius = img.shape[-1] / (finalRadius - initialRadius)
 
     # This is used to scale the result of the angle to get the appropriate Cartesian value
-    scaleAngle = img.shape[0] / (finalAngle - initialAngle)
+    scaleAngle = img.shape[-2] / (finalAngle - initialAngle)
 
     # Get list of cartesian x and y coordinate and create a 2D create of the coordinates using meshgrid
-    xs = np.arange(0, imageSize[1])
-    ys = np.arange(0, imageSize[0])
+    xs = np.arange(0, imageSize[-1])
+    ys = np.arange(0, imageSize[-2])
     x, y = np.meshgrid(xs, ys)
 
     # Take cartesian grid and convert to polar coordinates
@@ -181,7 +188,10 @@ def polar2img(
     theta = theta * scaleAngle
 
     # Reshape the image to be 3D, flattens the array if > 3D otherwise it makes it 3D with the 3rd dimension a size of 1
-    image = img.reshape((-1,) + img.shape)
+    if len(img.shape) < 3:
+        image = img.reshape((-1,) + img.shape)
+    else:
+        image = img
 
     pad = 3
 
@@ -210,7 +220,6 @@ def polar2img(
 
 
 if __name__ == "__main__":
-
     # np_im = plt.imread('../data/test_images/baboon.png')
     # grid_x, grid_y = np.meshgrid(np.arange(np_im.shape[1]), np.arange(np_im.shape[0]))
     # dx = 2 * np.random.randn(*np_im.shape[:-1])
@@ -235,23 +244,30 @@ if __name__ == "__main__":
     #                             padding_mode='reflection').squeeze().permute(1, 2, 0)
 
     # Read in image and convert to tensor for ground truth
-    Im = rgb2gray(plt.imread("../data/test_images/baboon.png"))
-    Im = cv2.resize(Im, dsize=(384, 384))
+    Im = rgb2gray(plt.imread("test_images/baboon.png"))
+    Im = cv2.resize(Im, dsize=(512, 512))
     Im = torch.Tensor(Im)
     Im /= Im.sum()
+
+    # I want to stack two versions of Im on top of each other using a new axis
+    Im = torch.stack((Im, Im), dim=0)
 
     # make copy to feed in for the forward pass
     I = Im.detach().clone()
     print(f"sum_before: {I.sum()}")
     I.requires_grad = True
+
     # po, settings = pt.convertToPolarImage(I.detach().numpy(), order=1, border='constant')  # theirs
     pot = img2polar(I)
+    # pdb.set_trace()
 
-    util.plot(pot.detach())
+    util.show(pot[1].detach().squeeze())
 
     I_recon = polar2img(pot, I.shape)
+    pdb.set_trace()
+
     print(f"sum_after: {I_recon.sum()}")
-    util.plot(I_recon.detach())
+    util.show(I_recon.detach())
     loss = torch.norm(Im - I_recon)
     print(f"loss: {loss}")
     loss.backward()

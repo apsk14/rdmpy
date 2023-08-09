@@ -80,6 +80,7 @@ def calibrate(
             "lr": 1e-2,
             "reg": 0,
             "plot_loss": False,
+            "get_inter_seidels": False,
         }
         def_fit_params.update(fit_params)
 
@@ -91,19 +92,25 @@ def calibrate(
         # seidel fitting
         if verbose:
             print("fitting seidel coefficients...")
-        seidel_coeffs = opt.estimate_coeffs(
+        coeffs = opt.estimate_coeffs(
             calib_image,
             psf_list=psf_locations,
             sys_params=def_sys_params,
             fit_params=def_fit_params,
             show_psfs=show_psfs,
             device=device,
-        ).detach()
+        )
+        get_inter_seidels = def_fit_params["get_inter_seidels"]
+        if get_inter_seidels:
+            seidel_coeffs = coeffs[-1]
+        else:
+            seidel_coeffs = coeffs
         if verbose:
             print("Fitted seidel coefficients: " + str(seidel_coeffs.detach().cpu()))
 
     else:
-        seidel_coeffs = torch.tensor(seidel_coeffs)
+        seidel_coeffs = torch.tensor(seidel_coeffs, device=device)
+        get_inter_seidels = False
 
     if get_psfs:
         # Next, with seidel coefficients, we decide which PSFs we need depending on our method
@@ -124,7 +131,7 @@ def calibrate(
         psf_data = seidel.compute_psfs(
             seidel_coeffs.cpu(),
             point_list,
-            def_sys_params,
+            sys_params=def_sys_params,
             polar=(model == "lri"),
             verbose=verbose,
             stack=False,
@@ -139,9 +146,14 @@ def calibrate(
                 device
             )  # here we store the PSF ROFT to save computation time later.
 
+        if get_inter_seidels:
+            seidel_coeffs = coeffs
+
         return seidel_coeffs, psf_data
 
     else:
+        if get_inter_seidels:
+            seidel_coeffs = coeffs
 
         return seidel_coeffs
 
@@ -223,7 +235,7 @@ def full_blur(
                 psf = seidel.compute_psfs(
                     seidel_coeffs,
                     [(x_grid[j], y_grid[i])],
-                    def_sys_params,
+                    sys_params=def_sys_params,
                     polar=False,
                     device=device,
                 )[0]
@@ -280,6 +292,7 @@ def deblur(
         "tv_reg": 1e-11,
         "l2_reg": 0,
         "plot_loss": False,
+        "balance": 3e-4,
     }
     def_opt_params.update(opt_params)
 
@@ -289,7 +302,11 @@ def deblur(
         image = image.to(device)
 
     if model == "lsi_wiener":
-        recon = (opt.wiener_torch((image.float() - 0.5) * 2, psf_data)) / 2 + 0.5
+        recon = (
+            opt.wiener_torch(
+                (image.float() - 0.5) * 2, psf_data, balance=def_opt_params["balance"]
+            )
+        ) / 2 + 0.5
     else:
         recon = opt.image_recon(
             image.float(),
@@ -344,6 +361,8 @@ def blind_deblur(
         "l2_reg": 0,
         "balance": 3e-4,
         "plot_loss": False,
+        "get_inter_seidels": False,
+        "get_inter_recons": False,
     }
     def_opt_params.update(opt_params)
 
@@ -361,14 +380,7 @@ def blind_deblur(
     if image.device is not device:
         image = image.to(device)
 
-    if method == "gradient":
-        return opt.blind_recon_gradient(
-            image, opt_params=def_opt_params, sys_params=def_sys_params, device=device
-        )
-    elif method == "grid":
-        return opt.blind_recon_grid(
-            image, opt_params=def_opt_params, sys_params=def_sys_params, device=device
-        )
-    else:
-        raise NotImplementedError
+    return opt.blind_recon_gradient(
+        image, opt_params=def_opt_params, sys_params=def_sys_params, device=device
+    )
 

@@ -15,6 +15,7 @@ from skimage.restoration import unwrap_phase as unwrap
 import torch.fft as fft
 from tqdm import tqdm
 from kornia.filters.sobel import spatial_gradient
+from skimage.restoration import unsupervised_wiener
 
 import pdb
 import torch
@@ -26,7 +27,6 @@ dirname = str(pathlib.Path(__file__).parent.absolute())
 def estimate_coeffs(
     calib_image, psf_list, sys_params, fit_params, device, show_psfs=False
 ):
-
     psfs_gt = torch.tensor(calib_image, device=device).float()
     if fit_params["seidel_init"] is not None:
         coeffs = torch.tensor(fit_params["seidel_init"], device=device)
@@ -46,6 +46,9 @@ def estimate_coeffs(
 
     if fit_params["plot_loss"]:
         losses = []
+
+    if fit_params["get_inter_seidels"]:
+        inter_seidels = []
 
     for iter in tqdm(range(fit_params["iters"])):
         # forward pass
@@ -94,39 +97,54 @@ def estimate_coeffs(
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if fit_params["get_inter_seidels"]:
+            if coeffs.shape[0] < 6:
+                inter_seidels += [
+                    torch.cat(
+                        (coeffs, torch.zeros(6 - coeffs.shape[0], 1, device=device))
+                    ).detach()
+                ]
+            else:
+                inter_seidels += [coeffs.detach().cpu().detach()]
 
-    if show_psfs:
-        psf_est = sum(psfs_estimate) / (len(psfs_estimate))
+    # if show_psfs:
+    #     psf_est = sum(psfs_estimate) / (len(psfs_estimate))
 
-        plt.subplot(1, 2, 2)
-        plt.tight_layout()
-        plt.axis("off")
-        plt.imshow(psf_est.detach().cpu(), cmap="inferno")
-        plt.gca().set_title("Seidel PSFs")
+    #     plt.subplot(1, 2, 2)
+    #     plt.tight_layout()
+    #     plt.axis("off")
+    #     plt.imshow(psf_est.detach().cpu(), cmap="inferno")
+    #     plt.gca().set_title("Seidel PSFs")
 
-        plt.subplot(1, 2, 1)
-        plt.tight_layout()
-        plt.axis("off")
-        plt.imshow(psfs_gt.detach().cpu(), cmap="inferno")
-        plt.gca().set_title("Measured PSFs")
+    #     plt.subplot(1, 2, 1)
+    #     plt.tight_layout()
+    #     plt.axis("off")
+    #     plt.imshow(psfs_gt.detach().cpu(), cmap="inferno")
+    #     plt.gca().set_title("Measured PSFs")
 
-    if fit_params["plot_loss"]:
-        plt.figure()
-        plt.plot(range(len(losses)), losses)
-        plt.show()
+    # if fit_params["plot_loss"]:
+    #     plt.figure()
+    #     plt.plot(range(len(losses)), losses)
+    #     plt.show()
+    del psfs_estimate
+    del psfs_gt
 
-    # util.show(torch.cat((psfs_gt/psfs_gt.max(), sum(psfs_estimate)/sum(psfs_estimate).max()), dim=1).detach().cpu())
-
-    if coeffs.shape[0] < 6:
-        return torch.cat((coeffs, torch.zeros(6 - coeffs.shape[0], 1, device=device)))
+    if fit_params["get_inter_seidels"]:
+        final_coeffs = inter_seidels
     else:
-        return coeffs
+        if coeffs.shape[0] < 6:
+            final_coeffs = torch.cat(
+                (coeffs, torch.zeros(6 - coeffs.shape[0], 1, device=device))
+            ).detach()
+        else:
+            final_coeffs = coeffs.detach()
+
+    return final_coeffs
 
 
 def video_recon(
     measurement_stack, psf_data, model, opt_params, device, use_prev_frame=True
 ):
-
     num_frames = measurement_stack.shape[0]
 
     for i in range(num_frames):
@@ -156,7 +174,6 @@ def video_recon(
 def image_recon(
     measurement, psf_data, model, opt_params, device, verbose=False, warm_start=None
 ):
-
     dim = measurement.shape
 
     if warm_start is not None:
@@ -195,7 +212,6 @@ def image_recon(
         losses = []
 
     for it in tqdm(range(opt_params["iters"])):
-
         # forward pass and loss
         if model == "lsi":
             measurement_guess = forward.padded_lsi(estimate, psf_data)
@@ -257,7 +273,6 @@ def image_recon(
 def blind_recon_gradient(
     measurement, opt_params, sys_params, device=torch.device("cpu")
 ):
-
     if opt_params["seidel_init"] is None:
         coeffs = torch.zeros((1, 1), device=device)
 
@@ -267,6 +282,12 @@ def blind_recon_gradient(
 
     if opt_params["plot_loss"]:
         losses = []
+
+    if opt_params["get_inter_seidels"]:
+        inter_seidels = []
+
+    if opt_params["get_inter_recons"]:
+        inter_recons = []
 
     for iter in tqdm(range(opt_params["iters"])):
         # forward pass
@@ -281,14 +302,18 @@ def blind_recon_gradient(
         )  # can also use .wiener with ,balance=3e-4
         recon = (recon / 2) + 0.5  # back-scale
 
-        recon_forward = forward.padded_lsi(recon, psfs_estimate)
-        data_loss = torch.mean((recon_forward - measurement) ** 2)
+        # recon_forward = forward.padded_lsi(recon, psfs_estimate)
+        # data_loss = torch.mean((recon_forward - measurement) ** 2)
 
         # loss (maximizing acutance)
         sharpness_loss = -torch.mean(
             torch.abs(spatial_gradient(recon[None, None, :, :], mode="diff"))
         )
-        loss = sharpness_loss
+        loss = (
+            sharpness_loss
+            + tv(recon, opt_params["tv_reg"])
+            + opt_params["l2_reg"] * torch.norm(recon)
+        )
 
         # pdb.set_trace()
         if opt_params["plot_loss"]:
@@ -299,20 +324,35 @@ def blind_recon_gradient(
         loss.backward()
         optimizer.step()
 
+        if opt_params["get_inter_seidels"]:
+            inter_seidels += [coeffs[0].detach().cpu().numpy()]
+
+        if opt_params["get_inter_recons"]:
+            inter_recons += [recon.detach().cpu().numpy()]
+
     if opt_params["plot_loss"]:
         plt.figure()
         plt.plot(range(len(losses)), losses)
         plt.show()
 
+    if opt_params["get_inter_recons"]:
+        recon = inter_recons
+    else:
+        recon = recon.detach().cpu().numpy()
+
+    if opt_params["get_inter_seidels"]:
+        coeffs = inter_seidels
+    else:
+        coeffs = coeffs.detach().cpu().numpy()
+
     return (
-        recon.detach().cpu().numpy(),
+        recon,
         psfs_estimate.detach().cpu().numpy(),
-        coeffs.detach().cpu().numpy(),
+        coeffs,
     )
 
 
 def blind_recon_grid(measurement, opt_params, sys_params, device=torch.device("cpu")):
-
     # coarse pass
     loss_list = []
     for coeff in torch.arange(0, 10, 1):
@@ -402,7 +442,6 @@ def center_crop(measurement, des_shape):
 
 
 def blind_recon_alt(measurement, opt_params, sys_params, device):
-
     if opt_params["seidel_init"] is None:
         # coeffs = torch.rand((1, 1), device=device)
         coeffs = torch.zeros((1, 1), device=device)
@@ -479,7 +518,7 @@ def blind_recon_alt(measurement, opt_params, sys_params, device):
     )
 
 
-def wiener_torch(image, psf, balance=3e-4, reg=None, is_real=True, clip=True):
+def wiener_torch(image, psf, balance=5e-4, reg=None, is_real=True, clip=True):
     if reg is None:
         reg, _ = laplacian(image.ndim, image.shape, is_real=is_real)
         reg = reg.to(device=image.device)
