@@ -1,4 +1,4 @@
-# Linear Revolution-Invariance: Modeling and Deblurring Spatially-Varying Imaging Systems
+# Ring Deconvolution Microscopy: An Exact Solution for Spatially-Varying Aberration Correction
 
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
@@ -10,9 +10,9 @@
 
 
 ## Background
-Official implementation of Linear Revolution-Invariant modeling and deblurring. 
+Official implementations of Seidel fitting, ring convolution, and ring deconvolution. 
 
-LRI forward modeling allows one to compute the output of any rotationally symmetric imaging system given only a few of its PSFs or its Seidel aberration coefficients. Simiarly, LRI deblurring offers a fast and more accurate alternative to deconvolution (e.g., Wiener filter, Richardson-Lucy) by accounting for radially-varying blur. LRI deblurring only requires a single calibration image of a few randomly scattered PSFs. This repository implements both LRI forward modeling and LRI deblurring via two functions ```blur``` and ```deblur```.
+Ring convolution allows one to compute the forward model of any rotationally symmetric imaging system. Simiarly, Ring deconvolution offers a fast and more accurate alternative to deconvolution (e.g., Wiener filter, Richardson-Lucy) by accounting for radially-varying blur. Both only require a single calibration image of a few randomly scattered PSFs. they implemented with the two functions ```blur``` and ```deblur```, respectively.
 
 This repository is still in early stages and will constantly be updated with new functionality and bug-fixes. In light of this **please run a ```git pull``` before every use.** It will soon be a PyPI package directly installable with pip.
 
