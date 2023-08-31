@@ -1,4 +1,4 @@
-#Welcome to the official repository for rdmpy, a python package for spatially-varying deblurring. Background info can be found in the paper below:
+# Welcome to the official repository for rdmpy, a python package for spatially-varying deblurring. Background info can be found in the paper below:
 
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
