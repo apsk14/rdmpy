@@ -4,7 +4,7 @@
 
 ## UPDATES:
 * [August 30th 2023] Introducing RDMPY v1!
-  * Official package to follow shortly.
+  * Official PyPI package to follow shortly.
   * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).
   * Please contact me if you have any issues or have ideas for the package!
 
