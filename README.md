@@ -3,7 +3,7 @@
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
-* [August 30th 2023] Introducing to RDMPY v1!
+* [August 30th 2023] Introducing RDMPY v1!
   * Official package to follow shortly.
   * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).
   * Please contact me if you have any issues or have ideas for the package!
