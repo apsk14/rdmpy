@@ -20,8 +20,7 @@ This repository is still in early stages and will constantly be updated with new
 
 For a quick walkthrough of the basic utility of this package please see ```example.ipynb```. 
 
-There are 3 main types of function in this package found in ```calibrate.py```, ```blur.py```, and ```deblur.py```. Each function is fully documented within those files.
-
+All functions for rdmpy can be found in either ```calibrate.py```, ```blur.py```, or ```deblur.py```. Each function is fully documented within those files.
 
 The necessary packages to run this code are:
 * numpy
