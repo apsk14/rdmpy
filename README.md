@@ -1,6 +1,5 @@
 #Welcome to the official repository for rdmpy, a python package for spatially-varying deblurring. Background info can be found in the paper below:
 
-## Ring Deconvolution Microscopy: An Exact Solution for Spatially-Varying Aberration Correction
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
