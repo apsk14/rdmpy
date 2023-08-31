@@ -1,12 +1,13 @@
-# Ring Deconvolution Microscopy: An Exact Solution for Spatially-Varying Aberration Correction
+#Welcome to the official repository for rdmpy, a python package for spatially-varying deblurring. Background info can be found in the paper below:
 
+## Ring Deconvolution Microscopy: An Exact Solution for Spatially-Varying Aberration Correction
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
-* [April 18th 2023] Updated to LRI v3! Changes include...
-  * Fixed LRI scaling issues.
-  * Added padded_lsi for true linear convolutions.
-  * Added full_deblur which implements the full linear blur (no assumptions) with every PSF.
+* [August 30th 2023] Introducing to RDMPY v1!
+  * Official package to follow shortly.
+  * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).
+  * Please contact me if you have any issues or have ideas for the package!
 
 
 ## Background
