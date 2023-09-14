@@ -2,6 +2,7 @@
 Implements all optimization functions. Primarily used by calibrate.py and deblur.py
 """
 import pathlib
+import gc
 
 import numpy as np
 import torch
@@ -144,6 +145,7 @@ def estimate_coeffs(
         plt.axis("off")
         plt.imshow(psfs_gt.detach().cpu(), cmap="inferno")
         plt.gca().set_title("Measured PSFs")
+        plt.show()
 
     if fit_params["plot_loss"]:
         plt.figure()
@@ -298,7 +300,13 @@ def image_recon(
         plt.plot(range(len(losses)), losses)
         plt.show()
 
-    return util.normalize(estimate.detach().cpu().float().numpy())
+    final = util.normalize(estimate.detach().cpu().float().numpy().copy())
+
+    del estimate
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return final
 
 
 def video_recon(

@@ -5,6 +5,8 @@ import torch
 import torch.fft as fft
 
 from ._src import opt, seidel, util
+import pdb
+import gc
 
 
 def calibrate(
@@ -192,21 +194,35 @@ def get_psfs(
         print("rendering PSFs...")
 
     psf_data = seidel.compute_psfs(
-        seidel_coeffs.cpu(),
+        seidel_coeffs,
         point_list,
         sys_params=def_sys_params,
         polar=(model == "lri"),
-        stack=False,
+        stack=True,
         verbose=verbose,
+        device=device,
     )
 
     # prep the PSFs for outputing to the user
     if model == "lsi":
         psf_data = psf_data[0].to(device)
     if model == "lri":
-        psf_data = torch.stack(psf_data)
-        psf_data = fft.rfft(psf_data, dim=1).to(
-            device
-        )  # here we store the PSF ROFT to save computation time later.
+        # here compute the RoFT of each PSF in-place (torch.rfft is memory inefficient)
+        for i in range(psf_data.shape[0]):
+            temp_rft = fft.rfft(psf_data[i, 0:-2, :], dim=0)
+            psf_data[i, 0 : psf_data.shape[1] // 2, :] = torch.real(temp_rft)
+            psf_data[i, psf_data.shape[1] // 2 :, :] = torch.imag(temp_rft)
+
+        del temp_rft
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # add together the real and imaginary parts of the RoFTs
+        psf_data = (
+            psf_data[:, 0 : psf_data.shape[1] // 2, :]
+            + 1j * psf_data[:, psf_data.shape[1] // 2 :, :]
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
 
     return psf_data

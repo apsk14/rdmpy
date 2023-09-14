@@ -148,12 +148,13 @@ def compute_psfs(
         if polar:
             if samples > 500:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 2, samples), device=device
-                )
+                    (samples, samples * 2 + 2, samples),
+                    device=device,
+                )  # add two extra rows for RoFT later
             else:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 4, samples), device=device
-                )
+                    (samples, samples * 4 + 2, samples), device=device
+                )  # add two extra rows for RoFT later
         else:
             desired_psfs = torch.zeros((samples, samples, samples), device=device)
     else:
@@ -182,7 +183,10 @@ def compute_psfs(
         if polar:
             curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
         if stack:
-            desired_psfs[idx, :, :] = curr_psf
+            # desired_psfs[idx] = curr_psf
+            desired_psfs[
+                idx, :-2, :
+            ] = curr_psf  # Leaving two extra rows for RoFT later
         else:
             desired_psfs += [curr_psf]
         idx += 1
