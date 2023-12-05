@@ -461,7 +461,9 @@ def batchimg2polar(
 
     # convert to tensors to accelerate point sampling
     theta, r = torch.meshgrid(
-        torch.tensor(theta, device=img.device), torch.tensor(radii, device=img.device)
+        torch.tensor(theta, device=img.device),
+        torch.tensor(radii, device=img.device),
+        indexing="ij",
     )
     center = torch.tensor(center, device=img.device)
     xCartesian, yCartesian = getCartesianPointsTorch(r, theta, center)
@@ -565,7 +567,7 @@ def batchpolar2img(
     # Get list of cartesian x and y coordinate and create a 2D create of the coordinates
     xs = torch.arange(0, imageSize[-1], device=img.device)
     ys = torch.arange(0, imageSize[-2], device=img.device)
-    y, x = torch.meshgrid(ys, xs)
+    y, x = torch.meshgrid(ys, xs, indexing="ij")
 
     # Take cartesian grid and convert to polar coordinates
     r, theta = getPolarPointsTorch(x, y, center)

@@ -48,6 +48,8 @@ def ring_convolve(
         obj = torch.tensor(obj).float()
     if obj.device is not device:
         obj = obj.to(device)
+    if not len(obj.shape) == 2 and obj.shape[0] == obj.shape[1]:
+        raise AssertionError(f"Object of shape {obj.shape} must be 2d square image")
 
     # infer info from the PSF roft
     num_radii = psf_roft.shape[0]
@@ -104,7 +106,6 @@ def batch_ring_convolve(obj, psf_roft, device=torch.device("cpu")):
         The ring convolution of the object with the PSF stack. Will be (B,C,N,N).
 
     """
-
     if not torch.is_tensor(obj):
         obj = torch.tensor(obj)  # .float()
     if obj.device is not device:
