@@ -173,6 +173,7 @@ def image_recon(
     model,
     opt_params,
     warm_start=None,
+    use_batch_conv=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -196,6 +197,9 @@ def image_recon(
 
     warm_start : torch.Tensor, optional
         Warm start for the optimization. The default is None.
+
+    use_batch_conv : bool, optional
+        Whether to use batched lri convolution. The default is False.
 
     verbose : bool, optional
         Whether to print out progress. The default is True.
@@ -244,44 +248,24 @@ def image_recon(
         tqdm(range(opt_params["iters"])) if verbose else range(opt_params["iters"])
     )
 
+    crop = lambda x: x[..., crop:-crop, crop:-crop] if opt_params["crop"] > 0 else x
+
     for it in iterations:
         # forward pass and loss
         if model == "lsi":
             measurement_guess = blur.convolve(estimate, psf_data)
-            if crop > 0:
-                loss = (
-                    loss_fn(
-                        (measurement_guess)[crop:-crop, crop:-crop],
-                        (measurement)[crop:-crop, crop:-crop],
-                    )
-                    + tv(estimate[crop:-crop, crop:-crop], opt_params["tv_reg"])
-                    + opt_params["l2_reg"] * torch.norm(estimate)
-                )
-            else:
-                loss = (
-                    loss_fn(measurement_guess, measurement)
-                    + tv(estimate, opt_params["tv_reg"])
-                    + opt_params["l2_reg"] * torch.norm(estimate)
-                )
+        elif use_batch_conv:
+            measurement_guess = blur.batch_ring_convolve(
+                estimate[None, None, ...], psf_data, device=device
+            )[0, 0]
         else:
-            measurement_guess = blur.ring_convolve(
-                estimate, psf_data, device=device, verbose=False
-            )
-            if crop > 0:
-                loss = (
-                    loss_fn(
-                        (measurement_guess)[crop:-crop, crop:-crop],
-                        (measurement)[crop:-crop, crop:-crop],
-                    )
-                    + tv(estimate[crop:-crop, crop:-crop], opt_params["tv_reg"])
-                    + opt_params["l2_reg"] * torch.norm(estimate)
-                )
-            else:
-                loss = (
-                    loss_fn(measurement_guess, measurement)
-                    + tv(estimate, opt_params["tv_reg"])
-                    + opt_params["l2_reg"] * torch.norm(estimate)
-                )
+            measurement_guess = blur.ring_convolve(estimate, psf_data, device=device)
+
+        loss = (
+            loss_fn(crop(measurement_guess), crop(measurement))
+            + tv(estimate, opt_params["tv_reg"])
+            + opt_params["l2_reg"] * torch.norm(estimate)
+        )
 
         if opt_params["plot_loss"]:
             losses += [loss.detach().cpu()]
