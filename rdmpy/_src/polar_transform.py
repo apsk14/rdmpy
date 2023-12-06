@@ -312,3 +312,301 @@ def polar2img(
     )
     cartImage = cartImage.squeeze()
     return cartImage
+
+
+######## Batched & Accelerated #######
+
+
+def getCartesianPointsTorch(r, theta, center):
+    """
+    Convert list of polar points to cartesian points
+
+    Parameters
+    ----------
+    r : torch.tensor
+        List of radii
+
+    theta : torch.tensor
+        List of angles
+
+    center : tuple
+        Center of the image, (x,y) format
+
+    Returns
+    -------
+    x : torch.tensor
+        List of x coordinates
+
+    y : torch.tensor
+        List of y coordinates
+
+    """
+    x = r * torch.cos(theta) + center[0]
+    y = r * torch.sin(theta) + center[1]
+    return x, y
+
+
+def getPolarPointsTorch(x, y, center):
+    """
+    Convert list of cartesian points to polar points in pytorch
+
+    Parameters
+    ----------
+    x : torch.tensor
+        List of x coordinates
+
+    y : torch.tensor
+        List of y coordinates
+
+    center : tuple
+        Center of the image (x,y) format
+
+    Returns
+    -------
+    r : torch.tensor
+        List of radii
+
+    theta : torch.tensor
+        List of angles
+
+    """
+    cX, cY = x - center[0], y - center[1]
+
+    r = torch.sqrt(cX**2 + cY**2)
+
+    theta = torch.arctan2(cY, cX)
+
+    # Make range of theta 0 -> 2pi instead of -pi -> pi
+    # According to StackOverflow, this is the fastest method:
+    # https://stackoverflow.com/questions/37358016/numpy-converting-range-of-angles-from-pi-pi-to-0-2pi
+    theta = torch.where(theta < 0, theta + 2 * torch.pi, theta)
+
+    return r, theta
+
+
+def batchimg2polar(
+    img,
+    numRadii=None,
+    finalRadius=None,
+    initialAngle=0,
+    finalAngle=np.pi * 2,
+    center=None,
+    border="constant",
+):
+    """
+    Converts batch of cartesian images to polar image.
+    Expects multichan images, but chan & batch dimension can be 1.
+
+    Parameters
+    ----------
+    img : torch.Tensor
+        Image to be converted. Should be (B, C, N, N)
+
+    numRadii : int, optional
+        Number of radii to use. If None, the image sidelength is used.
+
+    finalRadius : float, optional
+        Final radius to use. If None, the image diagonal is used.
+
+    initialAngle : float, optional
+        Initial angle to use in radians. Default is 0.
+
+    finalAngle : float, optional
+        Final angle to use in radians. Default is 2pi.
+
+    center : tuple, optional
+        Center of the image (x,y) format. Default is the center of the image.
+
+    border : str, optional
+        How to handle borders. Options are 'constant', 'reflect', 'replicate',
+        'circular', 'zeros'. Default is 'constant'.
+
+    Returns
+    -------
+    polarImage : torch.Tensor
+        Polar image will be (B, numAngles, numRadii, C)
+
+    """
+    if center is None:
+        center = (np.array(img.shape[-1:-3:-1]) - 1) / 2.0
+
+    if finalRadius is None:
+        corners = np.array([[0, 0], [0, 1], [1, 0], [1, 1]]) * img.shape[-2:]
+        radii, _ = getPolarPoints(corners[:, 1], corners[:, 0], center)
+        finalRadius = radii.max()
+        finalRadius = (img.shape[2] / 2) * np.sqrt(2)
+
+    maxSize = np.max(img.shape[2:])
+    if numRadii is None:
+        numRadii = maxSize
+
+    initialAngle = np.pi / 4
+    finalAngle = 2 * np.pi + np.pi / 4
+
+    if maxSize > 700:
+        numAngles = int(
+            2 * np.max(img.shape[2:]) * ((finalAngle - initialAngle) / (2 * np.pi))
+        )
+    else:
+        numAngles = int(
+            4 * np.max(img.shape[2:]) * ((finalAngle - initialAngle) / (2 * np.pi))
+        )
+
+    # get radii and angles for generating point sampling
+    radii = np.sqrt(2) * (
+        np.linspace(0, (img.shape[2] / 2), numRadii, endpoint=False, retstep=False)
+        + 0.5
+    )
+    theta = np.linspace(initialAngle, finalAngle, numAngles, endpoint=False)
+
+    # convert to tensors to accelerate point sampling
+    theta, r = torch.meshgrid(
+        torch.tensor(theta, device=img.device),
+        torch.tensor(radii, device=img.device),
+        indexing="ij",
+    )
+    center = torch.tensor(center, device=img.device)
+    xCartesian, yCartesian = getCartesianPointsTorch(r, theta, center)
+
+    pad = 3
+    if border == "constant":
+        # Pad image by 3 pixels and then offset all of the desired coordinates by 3
+        img = fun.pad(img, (pad, pad, pad, pad), "replicate")
+        xCartesian += pad
+        yCartesian += pad
+
+    gx = 2.0 * (xCartesian / (img.shape[3] - 1)) - 1.0
+    gy = 2.0 * (yCartesian / (img.shape[2] - 1)) - 1.0
+    desiredCoords = torch.stack((gx, gy), 2)
+    desiredCoords = desiredCoords.unsqueeze(0).repeat(
+        img.shape[0], *(1,) * len(desiredCoords.shape)
+    )
+
+    polarImage = fun.grid_sample(
+        img.float(),
+        desiredCoords.float(),
+        padding_mode="zeros",
+        mode=INTERP_TYPE,
+        align_corners=True,
+    )
+
+    return polarImage
+
+
+def batchpolar2img(
+    img,
+    imageSize=None,
+    initialRadius=0,
+    finalRadius=None,
+    initialAngle=0,
+    finalAngle=np.pi * 2,
+    center=None,
+    border="constant",
+):
+    """
+    Converts batch of polar images to cartesian image.
+    Expects multichan images, but chan & batch dimension can be 1.
+
+    Parameters
+    ----------
+    img : torch.Tensor
+        Polar image to be converted. Should be (B, C, A, R) where A is angles and R is radii.
+
+    imageSize : tuple, optional
+        Size of the image to be returned. If None, the image is assumed to be (B, C, R, R).
+
+    initialRadius : float, optional
+        Initial radius to use. Default is 0.
+
+    finalRadius : float, optional
+        Final radius to use. If None, the image diagonal is used.
+
+    initialAngle : float, optional
+        Initial angle to use in radians. Default is 0.
+
+    finalAngle : float, optional
+        Final angle to use in radians. Default is 2pi.
+
+    center : tuple, optional
+        Center of the image (x,y) format. Default is the center of the image.
+
+    border : str, optional
+        How to handle borders. Options are 'constant', 'reflect', 'replicate',
+
+    Returns
+    -------
+    cartImage : torch.Tensor
+        Cartesian image, will be imageSize
+
+    """
+    imageSize = (img.shape[-1], img.shape[-1])
+    if center is None:
+        center = ((imageSize[-2] - 1) / 2.0, (imageSize[-1] - 1) / 2.0)
+
+    initialAngle = np.pi / 4
+    finalAngle = 2 * np.pi + np.pi / 4
+
+    if finalRadius is None:
+        corners = np.array([[0, 0], [0, 1], [1, 0], [1, 1]]) * imageSize[-2:]
+        radii, _ = getPolarPoints(corners[:, 1], corners[:, 0], center)
+
+    # This is used to scale the result of the radius to get the Cartesian value
+    radii = np.sqrt(2) * (
+        np.linspace(
+            0, (imageSize[-2] / 2), img.shape[-1], endpoint=False, retstep=False
+        )
+        + 0.5
+    )
+    initialRadius = radii[0]
+    finalRadius = radii[-1]
+    scaleRadius = img.shape[-1] / (finalRadius - initialRadius)
+
+    # This is used to scale the result of the angle to get the  Cartesian value
+    scaleAngle = img.shape[-2] / (finalAngle - initialAngle)
+
+    # Get list of cartesian x and y coordinate and create a 2D create of the coordinates
+    xs = torch.arange(0, imageSize[-1], device=img.device)
+    ys = torch.arange(0, imageSize[-2], device=img.device)
+    y, x = torch.meshgrid(ys, xs, indexing="ij")
+
+    # Take cartesian grid and convert to polar coordinates
+    r, theta = getPolarPointsTorch(x, y, center)
+
+    # Offset the radius by the initial source radius
+    r = r - initialRadius
+
+    # Offset the theta angle by the initial source angle
+    # The theta values may go past 2pi, so they are modulo 2pi.
+    # Note: This assumes initial source angle is positive
+    theta = torch.remainder(theta - initialAngle + 2 * np.pi, 2 * np.pi)
+
+    # Scale the radius using scale factor
+    r = r * scaleRadius
+
+    # Scale the angle from radians to pixels using scale factor
+    theta = theta * scaleAngle
+
+    pad = 3
+
+    if border == "constant":
+        # Pad image by 3 pixels and then offset all of the desired coordinates by 3
+        img = fun.pad(img, (pad, pad, pad, pad), "replicate")
+        r += pad
+        theta += pad
+
+    gr = 2.0 * (r / (img.shape[3] - 1)) - 1.0
+    gtheta = 2.0 * (theta / (img.shape[2] - 1)) - 1.0
+    desiredCoords = torch.stack((gr, gtheta), 2)
+    desiredCoords = desiredCoords.unsqueeze(0).repeat(
+        img.shape[0], *(1,) * len(desiredCoords.shape)
+    )
+
+    cartImage = fun.grid_sample(
+        img.float(),
+        desiredCoords.float(),
+        padding_mode="zeros",
+        mode=INTERP_TYPE,
+        align_corners=True,
+    )
+
+    return cartImage
