@@ -20,6 +20,7 @@ def ring_deconvolve(
     tv_reg=1e-9,
     l2_reg=1e-9,
     opt_params={},
+    warm_start=None,
     process=True,
     verbose=True,
     device=torch.device("cpu"),
@@ -82,6 +83,7 @@ def ring_deconvolve(
         "tv_reg": tv_reg,
         "l2_reg": l2_reg,
         "plot_loss": False,
+        "fraction": 0,
     }
     def_opt_params.update(opt_params)
 
@@ -93,10 +95,115 @@ def ring_deconvolve(
     if image.device is not device:
         image = image.to(device)
 
+    if warm_start is not None:
+        warm_start = torch.tensor(warm_start)
+        if warm_start.device is not device:
+            warm_start = warm_start.to(device)
+
     recon = opt.image_recon(
         image.float(),
         psf_roft,
         model="lri",
+        opt_params=def_opt_params,
+        warm_start=warm_start,
+        device=device,
+        verbose=verbose,
+    )
+
+    return recon
+
+
+def ring_deconvolve_batch(
+    image,
+    seidel_coeffs,
+    tv_reg=1e-9,
+    l2_reg=1e-9,
+    sys_params={},
+    opt_params={},
+    process=True,
+    verbose=True,
+    device=torch.device("cpu"),
+):
+    """
+    Ring deconvolves an image with a stack of PSFs.
+
+    Parameters
+    ----------
+    image : np.ndarray or torch.Tensor
+        The image to be deconvolved. Must be (N,N).
+
+    psf_roft : torch.Tensor
+        The stack of PSFs to deconvolve the image with. The PSFs should be in the
+        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
+        M is the number of angles, and is L is number of radii the in the RoFT.
+
+    tv_reg : float, optional
+        The TV regularization parameter. Default is 1e-10.
+
+    l2_reg : float, optional
+        The L2 regularization parameter. Default is 1e-10.
+
+    opt_params : dict, optional
+        The optimization/regularization parameters to use for deconvolution.
+        See `opt.py` for details.
+
+    process : bool, optional
+        Whether to process the image before deconvolution. Default is True.
+
+    verbose : bool, optional
+        Whether to display a progress bar.
+
+    device : torch.device, optional
+        The device to use for the computation.
+
+    Returns
+    -------
+    recon : torch.Tensor
+        The ring deconvolved image. Will be (N,N).
+
+    Notes
+    -----
+    An implementation of `Ring Deconvolution Microscopy:
+    An Exact Solution for Spatially-Varying Aberration Correction"
+    https://arxiv.org/abs/2206.08928
+
+    """
+    dim = image.shape[0]
+
+    def_sys_params = {
+        "samples": dim,
+        "L": 1e-3,
+        "lamb": 0.55e-6,
+        "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
+        "z": 100e-3,
+    }
+    def_sys_params.update(sys_params)
+
+    # default optimization parameters
+    def_opt_params = {
+        "iters": 300,
+        "optimizer": "adam",
+        "lr": 7.5e-2,
+        "init": "measurement",
+        "crop": 0,
+        "tv_reg": tv_reg,
+        "l2_reg": l2_reg,
+        "plot_loss": False,
+    }
+    def_opt_params.update(opt_params)
+
+    if process:
+        image = util.process(image, dim=image.shape) * 0.9
+
+    if not torch.is_tensor(image):
+        image = torch.tensor(image)
+    if image.device is not device:
+        image = image.to(device)
+
+    recon = opt.image_recon_batch(
+        image.float(),
+        seidel_coeffs,
+        sys_params=def_sys_params,
         opt_params=def_opt_params,
         device=device,
         verbose=verbose,
@@ -310,7 +417,7 @@ def deconvolve(
     elif method == "iter":
         recon = opt.image_recon(
             image.float(),
-            psf,
+            psf.float(),
             model="lsi",
             opt_params=def_opt_params,
             verbose=verbose,

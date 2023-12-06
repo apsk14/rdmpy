@@ -3,10 +3,14 @@
 import numpy as np
 import torch
 import torch.fft as fft
+import matplotlib.pyplot as plt
+import matplotlib as mpl
 
 from ._src import opt, seidel, util
 import pdb
 import gc
+
+mpl.rcParams["figure.dpi"] = 500
 
 
 def calibrate(
@@ -76,7 +80,12 @@ def calibrate(
         "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
         "z": 100e-3,
     }
+
     def_sys_params.update(sys_params)
+
+    def_sys_params["pupil_radius"] = (
+        (def_sys_params["samples"]) * (def_sys_params["lamb"]) * (def_sys_params["z"])
+    ) / (4 * (def_sys_params["L"]))
 
     # parameters which are used for the seidel fitting procedure
     def_fit_params = {
@@ -84,6 +93,7 @@ def calibrate(
         "centered_psf": False,
         "min_distance": 30,
         "threshold": 0.2,
+        "disk": 2,
         "num_seidel": num_seidel,
         "init": "zeros",
         "seidel_init": None,
@@ -141,7 +151,7 @@ def get_psfs(
     dim,
     model,
     sys_params={},
-    verbose=False,
+    verbose=True,
     device=torch.device("cpu"),
 ):
     """
@@ -182,6 +192,9 @@ def get_psfs(
     }
     def_sys_params.update(sys_params)
 
+    if not torch.is_tensor(seidel_coeffs):
+        seidel_coeffs = torch.tensor(seidel_coeffs).to(device)
+
     if model == "lsi":
         point_list = [(0, 0)]  # just the center PSF
     elif model == "lri":
@@ -193,12 +206,18 @@ def get_psfs(
     if verbose:
         print("rendering PSFs...")
 
+    if model == "lsi":
+        buffer = 0
+    elif model == "lri":
+        buffer = 2
+
     psf_data = seidel.compute_psfs(
         seidel_coeffs,
         point_list,
         sys_params=def_sys_params,
         polar=(model == "lri"),
         stack=True,
+        buffer=buffer,
         verbose=verbose,
         device=device,
     )
@@ -215,14 +234,13 @@ def get_psfs(
 
         del temp_rft
         gc.collect()
-        torch.cuda.empty_cache()
 
-        # add together the real and imaginary parts of the RoFTs
-        psf_data = (
-            psf_data[:, 0 : psf_data.shape[1] // 2, :]
-            + 1j * psf_data[:, psf_data.shape[1] // 2 :, :]
-        )
-        gc.collect()
-        torch.cuda.empty_cache()
+        # # add together the real and imaginary parts of the RoFTs
+        # psf_data = (
+        #     psf_data[:, 0 : psf_data.shape[1] // 2, :]
+        #     + 1j * psf_data[:, psf_data.shape[1] // 2 :, :]
+        # )
+        # gc.collect()
+        # torch.cuda.empty_cache()
 
     return psf_data

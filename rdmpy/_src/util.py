@@ -15,6 +15,7 @@ from skimage.morphology import erosion, disk
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from cv2 import VideoWriter, VideoWriter_fourcc
+import pdb
 
 PLT_SIZE = 5
 
@@ -74,17 +75,26 @@ def get_calib_info(calib_image, dim, fit_params):
     psf = calib_image.copy()
     psf[psf < 0] = 0
     psf[psf < np.quantile(psf, 0.9)] = 0
-    raw_coord = corner_peaks(
-        erosion(psf, disk(2)),
-        min_distance=fit_params["min_distance"],
-        indices=True,
-        threshold_rel=fit_params["threshold"],
-    )
+    if fit_params["disk"] <= 0:
+        raw_coord = corner_peaks(
+            psf,
+            min_distance=fit_params["min_distance"],
+            indices=True,
+            threshold_rel=fit_params["threshold"],
+        )
+    else:
+        raw_coord = corner_peaks(
+            erosion(psf, disk(fit_params["disk"])),
+            min_distance=fit_params["min_distance"],
+            indices=True,
+            threshold_rel=fit_params["threshold"],
+        )
     distances = np.sqrt(np.sum(np.square(raw_coord - fit_params["sys_center"]), axis=1))
     if fit_params["centered_psf"]:
         center = raw_coord[np.argmin(distances), :]
+        print(center)
     else:
-        center = fit_params["sys_center"]
+        center = fit_params["sys_center"].copy()
     if dim // 2 > center[0]:
         PAD = dim // 2 - center[0]
         calib_image = np.pad(calib_image, ((PAD, 0), (0, 0)))
@@ -763,3 +773,24 @@ def load_model(model_type, model_path, device):
     model_type.load_state_dict(torch.load(model_path, map_location=device))
     model_type.eval()
     return model_type  # returns a loaded model
+
+
+# ChatGPT-3.5 generated
+def split_list(lst, n, idx):
+    # Calculate the approximate segment size
+    avg_segment_size = len(lst) // n
+    remainder = len(lst) % n  # Calculate the remainder elements
+
+    segments = []
+    segment_indices = []  # To store corresponding indices
+    start = 0
+
+    for i in range(n):
+        # Determine the segment size, adding 1 to the size if there's a remainder
+        segment_size = avg_segment_size + (1 if i < remainder else 0)
+        end = start + segment_size
+        segments.append(lst[start:end])
+        segment_indices.append(start)  # Store the indices as a tuple
+        start = end
+
+    return segments[idx], segment_indices[idx]

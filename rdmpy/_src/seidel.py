@@ -71,6 +71,7 @@ def compute_psfs(
     sys_params={},
     polar=False,
     stack=False,
+    buffer=2,
     verbose=False,
     device=torch.device("cpu"),
 ):
@@ -92,11 +93,15 @@ def compute_psfs(
     polar : bool, optional
         Whether to return PSFs in polar coordinates.
 
+    buffer : int, optional
+        How many extra rows to add to each PSF for RoFT.
+
     stack : bool, optional
         Whether to stack PSFs into a single tensor.
 
     verbose : bool, optional
         Whether to display a progress bar.
+
 
     device : torch.device, optional
         Which device to run on.
@@ -122,7 +127,7 @@ def compute_psfs(
 
         def_sys_params.update(sys_params)
         sys_params = def_sys_params
-    num_radii = len(desired_list)
+    # num_radii = len(desired_list)
     desired_list = [
         (
             torch.tensor(i[0], device=device).float(),
@@ -146,14 +151,14 @@ def compute_psfs(
     )
     if stack:
         if polar:
-            if samples > 500:
+            if samples > 700:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 2 + 2, samples),
+                    (samples, samples * 3 + buffer, samples),
                     device=device,
                 )  # add two extra rows for RoFT later
             else:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 4 + 2, samples), device=device
+                    (samples, samples * 4 + buffer, samples), device=device
                 )  # add two extra rows for RoFT later
         else:
             desired_psfs = torch.zeros((samples, samples, samples), device=device)
@@ -181,12 +186,15 @@ def compute_psfs(
             mode="bicubic",
         )
         if polar:
-            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=num_radii)
+            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=dim)
         if stack:
             # desired_psfs[idx] = curr_psf
-            desired_psfs[
-                idx, :-2, :
-            ] = curr_psf  # Leaving two extra rows for RoFT later
+            if buffer > 0:
+                desired_psfs[
+                    idx, :-buffer, :
+                ] = curr_psf  # Leaving two extra rows for RoFT later
+            else:
+                desired_psfs[idx] = curr_psf
         else:
             desired_psfs += [curr_psf]
         idx += 1

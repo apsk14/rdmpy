@@ -143,7 +143,7 @@ def img2polar(
 
     if maxSize > 700:
         numAngles = int(
-            2 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
+            3 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
         )
     else:
         numAngles = int(

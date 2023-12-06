@@ -3,18 +3,25 @@ Implements all optimization functions. Primarily used by calibrate.py and deblur
 """
 import pathlib
 import gc
+import pdb
 
 import numpy as np
 import torch
 import torch.fft as fft
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 
 from kornia.filters.sobel import spatial_gradient
 
-from . import util, seidel
+from . import util, seidel, polar_transform
 from .. import blur
+import gc
+from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast
+
+mpl.rcParams["figure.dpi"] = 500
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
@@ -110,7 +117,7 @@ def estimate_coeffs(
                 device=coeffs.device,
             )
         # loss
-        loss = l1_loss_fn(
+        loss = l2_loss_fn(
             util.normalize(sum(psfs_estimate).float()), util.normalize(psfs_gt)
         ) + fit_params["reg"] * l2_loss_fn(coeffs, -coeffs)
 
@@ -264,9 +271,72 @@ def image_recon(
                     + opt_params["l2_reg"] * torch.norm(estimate)
                 )
         else:
-            measurement_guess = blur.ring_convolve(
-                estimate, psf_data, device=device, verbose=False
-            )
+            # with autocast():
+            if opt_params["fraction"] > 0:
+                measurement_guess_1 = checkpoint(
+                    (
+                        lambda x, y: blur.ring_convolve_fractional(
+                            x,
+                            y,
+                            fraction=[0, opt_params["fraction"]],
+                            device=x.device,
+                        )
+                    ),
+                    estimate,
+                    psf_data,
+                )
+                measurement_guess_2 = checkpoint(
+                    (
+                        lambda x, y: blur.ring_convolve_fractional(
+                            x,
+                            y,
+                            fraction=[1, opt_params["fraction"]],
+                            device=x.device,
+                        )
+                    ),
+                    estimate,
+                    psf_data,
+                )
+                measurement_guess_3 = checkpoint(
+                    (
+                        lambda x, y: blur.ring_convolve_fractional(
+                            x,
+                            y,
+                            fraction=[2, opt_params["fraction"]],
+                            device=x.device,
+                        )
+                    ),
+                    estimate,
+                    psf_data,
+                )
+                measurement_guess_4 = checkpoint(
+                    (
+                        lambda x, y: blur.ring_convolve_fractional(
+                            x,
+                            y,
+                            fraction=[3, opt_params["fraction"]],
+                            device=x.device,
+                        )
+                    ),
+                    estimate,
+                    psf_data,
+                )
+                measurement_guess = polar_transform.polar2img(
+                    fft.irfft(
+                        measurement_guess_1
+                        + measurement_guess_2
+                        + measurement_guess_3
+                        + measurement_guess_4,
+                        dim=0,
+                    ),
+                    estimate.shape,
+                )
+
+            else:
+                measurement_guess = blur.ring_convolve(
+                    estimate, psf_data, device=device, verbose=False
+                )
+
             if crop > 0:
                 loss = (
                     loss_fn(
@@ -282,6 +352,137 @@ def image_recon(
                     + tv(estimate, opt_params["tv_reg"])
                     + opt_params["l2_reg"] * torch.norm(estimate)
                 )
+
+        # if opt_params["plot_loss"]:
+        #     losses += [loss.detach().cpu()]
+
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        # loss.backward()
+        # # del loss
+        # # del measurement_guess
+        # # with torch.cuda.device("cuda:1"):
+        # #     torch.cuda.empty_cache()
+
+        # # backward
+        # # if (it + 1) % 10 == 0:
+        # #     # every 10 iterations of batches of size 10
+        # optimizer.step()
+        # optimizer.zero_grad(set_to_none=True)
+
+        # project onto [0,1]
+        estimate.data[estimate.data < 0] = 0
+        estimate.data[estimate.data > 1] = 1
+
+    if opt_params["plot_loss"]:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
+
+    final = util.normalize(estimate.detach().cpu().float().numpy().copy())
+
+    del estimate
+    gc.collect()
+
+    return final
+
+
+def image_recon_batch(
+    measurement,
+    seidel_coeffs,
+    opt_params,
+    sys_params,
+    warm_start=None,
+    verbose=True,
+    device=torch.device("cpu"),
+):
+    """
+    Deblurs an image using either deconvolution or ring deconvolution
+
+    Parameters
+    ----------
+    measurement : torch.Tensor
+        Measurement to be deblurred. Should be (N,N).
+
+    psf_data : torch.Tensor
+        Stack of rotationatal Fourier transforms of the PSFs if model is 'lri',
+        otherwise single center PSF if model is 'lsi'.
+
+    opt_params : dict
+        Dictionary of optimization parameters.
+
+    warm_start : torch.Tensor, optional
+        Warm start for the optimization. The default is None.
+
+    verbose : bool, optional
+        Whether to print out progress. The default is True.
+
+    device : torch.device, optional
+        Device to run the reconstruction on. The default is torch.device("cpu").
+
+    Returns
+    -------
+    estimate : torch.Tensor
+        Deblurred image. Will be (N,N).
+
+    """
+    dim = measurement.shape
+
+    if warm_start is not None:
+        estimate = warm_start.clone()
+    else:
+        if opt_params["init"] == "measurement":
+            estimate = measurement.clone()
+        elif opt_params["init"] == "zero":
+            estimate = torch.zeros(dim, device=device)
+        elif opt_params["init"] == "noise":
+            estimate = torch.randn(dim, device=device)
+        else:
+            raise NotImplementedError
+
+    estimate.requires_grad = True
+
+    if opt_params["optimizer"] == "adam":
+        optimizer = torch.optim.Adam([estimate], lr=opt_params["lr"])
+    elif opt_params["optimizer"] == "sgd":
+        optimizer = torch.optim.SGD([estimate], lr=opt_params["lr"])
+    else:
+        raise NotImplementedError
+
+    loss_fn = torch.nn.MSELoss()
+    crop = opt_params["crop"]
+
+    losses = []
+
+    if opt_params["plot_loss"]:
+        losses = []
+
+    iterations = (
+        tqdm(range(opt_params["iters"])) if verbose else range(opt_params["iters"])
+    )
+
+    for it in iterations:
+        # forward pass and loss
+
+        measurement_guess = blur.ring_convolve_batch(
+            estimate, seidel_coeffs, sys_params=sys_params, device=device, verbose=False
+        )
+        if crop > 0:
+            loss = (
+                loss_fn(
+                    (measurement_guess)[crop:-crop, crop:-crop],
+                    (measurement)[crop:-crop, crop:-crop],
+                )
+                + tv(estimate[crop:-crop, crop:-crop], opt_params["tv_reg"])
+                + opt_params["l2_reg"] * torch.norm(estimate)
+            )
+        else:
+            loss = (
+                loss_fn(measurement_guess, measurement)
+                + tv(estimate, opt_params["tv_reg"])
+                + opt_params["l2_reg"] * torch.norm(estimate)
+            )
 
         if opt_params["plot_loss"]:
             losses += [loss.detach().cpu()]
@@ -304,7 +505,6 @@ def image_recon(
 
     del estimate
     gc.collect()
-    torch.cuda.empty_cache()
 
     return final
 
