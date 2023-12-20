@@ -6,6 +6,7 @@ import pathlib
 
 import numpy as np
 import torch
+from torch.nn.functional import interpolate
 
 import matplotlib as mpl
 from tqdm import tqdm
@@ -72,6 +73,7 @@ def compute_psfs(
     polar=False,
     stack=False,
     buffer=2,
+    downsample=1,
     verbose=False,
     device=torch.device("cpu"),
 ):
@@ -153,15 +155,27 @@ def compute_psfs(
         if polar:
             if samples > 700:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 3 + buffer, samples),
+                    (
+                        samples // downsample,
+                        samples // downsample * 3 + buffer,
+                        samples // downsample,
+                    ),
                     device=device,
                 )  # add two extra rows for RoFT later
             else:
                 desired_psfs = torch.zeros(
-                    (samples, samples * 4 + buffer, samples), device=device
+                    (
+                        samples // downsample,
+                        samples // downsample * 4 + buffer,
+                        samples // downsample,
+                    ),
+                    device=device,
                 )  # add two extra rows for RoFT later
         else:
-            desired_psfs = torch.zeros((samples, samples, samples), device=device)
+            desired_psfs = torch.zeros(
+                (samples // downsample, samples // downsample, samples // downsample),
+                device=device,
+            )
     else:
         desired_psfs = []
     idx = 0
@@ -185,8 +199,18 @@ def compute_psfs(
             (-(point[1].cpu().numpy()), (point[0].cpu().numpy())),
             mode="bicubic",
         )
+        # curr_psf = block_reduce(curr_psf, block_size=[2, 2], func=np.mean)
+        if downsample > 1:
+            curr_psf = interpolate(
+                curr_psf.unsqueeze(0).unsqueeze(0),
+                scale_factor=1 / downsample,
+                mode="bilinear",
+            )
+
         if polar:
-            curr_psf = polar_transform.img2polar(curr_psf.float(), numRadii=dim)
+            curr_psf = polar_transform.img2polar(
+                curr_psf.float(), numRadii=dim // downsample
+            )
         if stack:
             # desired_psfs[idx] = curr_psf
             if buffer > 0:

@@ -15,7 +15,6 @@ from skimage.morphology import erosion, disk
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from cv2 import VideoWriter, VideoWriter_fourcc
-import pdb
 
 PLT_SIZE = 5
 

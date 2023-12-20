@@ -3,6 +3,9 @@
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
+* [December 4th 2023] Accelerated implementations of ring deconvolution.
+  * Now run deconvolution up to 15x faster!
+  * Run batched ring convolution up to 100x faster!
 * [August 30th 2023] Introducing RDMPY v1!
   * Official PyPI package to follow shortly.
   * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).

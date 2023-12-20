@@ -21,6 +21,7 @@ def ring_deconvolve(
     l2_reg=1e-9,
     opt_params={},
     warm_start=None,
+    use_batch_conv=False,
     process=True,
     verbose=True,
     device=torch.device("cpu"),
@@ -31,7 +32,7 @@ def ring_deconvolve(
     Parameters
     ----------
     image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (N,N).
+        The image to be deconvolved. Must be (N,N), (C,N,N), or (B,C,N,N).
 
     psf_roft : torch.Tensor
         The stack of PSFs to deconvolve the image with. The PSFs should be in the
@@ -47,6 +48,9 @@ def ring_deconvolve(
     opt_params : dict, optional
         The optimization/regularization parameters to use for deconvolution.
         See `opt.py` for details.
+
+    use_batch_conv : bool, optional
+        Whether to use batched or unbatched lri convolution. The default is False.
 
     process : bool, optional
         Whether to process the image before deconvolution. Default is True.
@@ -69,7 +73,6 @@ def ring_deconvolve(
     https://arxiv.org/abs/2206.08928
 
     """
-
     if len(psf_roft.shape) != 3:
         raise ValueError("Ring deconvolution needs a radial stack of PSF RoFTs")
 
@@ -88,12 +91,10 @@ def ring_deconvolve(
     def_opt_params.update(opt_params)
 
     if process:
-        image = util.process(image, dim=image.shape) * 0.9
+        image = util.process(image, dim=image.shape[-2:]) * 0.9
 
     if not torch.is_tensor(image):
         image = torch.tensor(image)
-    if image.device is not device:
-        image = image.to(device)
 
     if warm_start is not None:
         warm_start = torch.tensor(warm_start)
@@ -101,11 +102,12 @@ def ring_deconvolve(
             warm_start = warm_start.to(device)
 
     recon = opt.image_recon(
-        image.float(),
-        psf_roft,
+        image.to(device).float(),
+        psf_roft.to(device),
         model="lri",
         opt_params=def_opt_params,
         warm_start=warm_start,
+        use_batch_conv=use_batch_conv,
         device=device,
         verbose=verbose,
     )
@@ -120,6 +122,8 @@ def ring_deconvolve_batch(
     l2_reg=1e-9,
     sys_params={},
     opt_params={},
+    warm_start=None,
+    use_batch_conv=False,
     process=True,
     verbose=True,
     device=torch.device("cpu"),
@@ -205,6 +209,7 @@ def ring_deconvolve_batch(
         seidel_coeffs,
         sys_params=def_sys_params,
         opt_params=def_opt_params,
+        use_batch_conv=True,
         device=device,
         verbose=verbose,
     )

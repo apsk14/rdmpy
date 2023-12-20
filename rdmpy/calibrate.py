@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 from ._src import opt, seidel, util
-import pdb
 import gc
 
 mpl.rcParams["figure.dpi"] = 500
@@ -21,8 +20,9 @@ def calibrate(
     num_seidel=4,
     fit_params={},
     sys_params={},
-    verbose=True,
     show_psfs=False,
+    downsample=1,
+    verbose=True,
     device=torch.device("cpu"),
 ):
     """
@@ -51,11 +51,14 @@ def calibrate(
     sys_params : dict, optional
         Parameters for the optical system. See `seidel.py` for details.
 
-    verbose : bool, optional
-        Whether to print out progress.
-
     show_psfs : bool, optional
         Whether to show the PSFs estimated by the Seidel fit.
+
+    downsample : int, optional
+        Factor by which to downsample the PSFs after fitting. Useful for saving memory.
+
+    verbose : bool, optional
+        Whether to print out progress.
 
     device : torch.device, optional
         Device to run the calibration on.
@@ -133,6 +136,7 @@ def calibrate(
             dim,
             model,
             sys_params=def_sys_params,
+            downsample=downsample,
             verbose=verbose,
             device=device,
         )
@@ -151,6 +155,7 @@ def get_psfs(
     dim,
     model,
     sys_params={},
+    downsample=1,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -169,6 +174,9 @@ def get_psfs(
 
     sys_params : dict, optional
         Parameters for the optical system. See `seidel.py` for details.
+
+    downsample : int, optional
+        Factor by which to downsample the PSFs after fitting. Useful for saving memory.
 
     verbose : bool, optional
 
@@ -218,6 +226,7 @@ def get_psfs(
         polar=(model == "lri"),
         stack=True,
         buffer=buffer,
+        downsample=downsample,
         verbose=verbose,
         device=device,
     )
@@ -235,7 +244,7 @@ def get_psfs(
         del temp_rft
         gc.collect()
 
-        # # add together the real and imaginary parts of the RoFTs
+        # add together the real and imaginary parts of the RoFTs
         # psf_data = (
         #     psf_data[:, 0 : psf_data.shape[1] // 2, :]
         #     + 1j * psf_data[:, psf_data.shape[1] // 2 :, :]

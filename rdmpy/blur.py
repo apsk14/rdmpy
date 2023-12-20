@@ -9,9 +9,6 @@ from tqdm import tqdm
 
 from ._src import polar_transform, seidel, util
 
-import pdb
-import gc
-
 
 def ring_convolve(
     obj,
@@ -50,6 +47,8 @@ def ring_convolve(
         obj = torch.tensor(obj).float()
     if obj.device is not device:
         obj = obj.to(device)
+    if not len(obj.shape) == 2 and obj.shape[0] == obj.shape[1]:
+        raise AssertionError(f"Object of shape {obj.shape} must be 2d square image")
 
     # infer info from the PSF roft
     num_radii = psf_roft.shape[0]
@@ -75,7 +74,8 @@ def ring_convolve(
         curr_psf_polar_fft = (
             psf_roft[index, 0 : psf_roft.shape[1] // 2, :]
             + 1j * psf_roft[index, psf_roft.shape[1] // 2 :, :]
-        )  # psf_roft[index, :, :]
+        )
+        # curr_psf_polar_fft = psf_roft[index, :, :]
         integration_area = r * dr * dtheta
         img_polar_fft += integration_area * (
             obj_fft[:, index][:, None] * curr_psf_polar_fft
@@ -148,11 +148,12 @@ def ring_convolve_fractional(
     dtheta = 2 * np.pi / obj_polar.shape[0]
 
     radii = tqdm(r_list) if verbose else (r_list)
-    for r in radii:
+    for index, r in enumerate(radii):
         curr_psf_polar_fft = (
             psf_roft[rs, 0 : psf_roft.shape[1] // 2, :]
             + 1j * psf_roft[rs, psf_roft.shape[1] // 2 :, :]
-        )  # psf_roft[index, :, :]
+        )  #
+        # curr_psf_polar_fft = psf_roft[index, :, :]
         integration_area = r * dr * dtheta
         img_polar_fft += integration_area * (
             obj_fft[:, rs][:, None] * curr_psf_polar_fft
@@ -249,6 +250,65 @@ def ring_convolve_batch(
         img_polar_fft += integration_area * (obj_fft[:, index][:, None] * psf_roft)
     img_polar = fft.irfft(img_polar_fft, dim=0)
     img = polar_transform.polar2img(img_polar, obj.shape)
+
+    return img
+
+
+def batch_ring_convolve(obj, psf_roft, device=torch.device("cpu")):
+    """
+
+    Returns the ring convolution of a batch of multichannel objects with a stack of PSFs.
+
+    Parameters
+    ----------
+    obj : torch.Tensor
+        The image to be convolved with the PSF stack. Must be (B,C,N,N) or (B,Z,C,N,N).
+
+    psf_roft : torch.Tensor
+        The stack of PSFs to convolve the image with. The PSFs should be in the
+        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
+        M is the number of angles, and L is the number of radii the in the RoFT.
+
+    device : torch.device, optional
+        The device to use for the computation.
+
+    Returns
+    -------
+    img : torch.Tensor
+        The ring convolution of the object with the PSF stack. Will be (B,C,N,N).
+
+    """
+    if not torch.is_tensor(obj):
+        obj = torch.tensor(obj)  # .float()
+    if obj.device is not device:
+        obj = obj.to(device)
+
+    # infer info from the PSF roft
+    num_radii = psf_roft.shape[0]
+
+    # get object RoFT
+    obj_polar = polar_transform.batchimg2polar(obj, numRadii=num_radii)
+    obj_fft = fft.rfft(obj_polar, dim=-2)
+
+    r_list = torch.tensor(
+        np.sqrt(2)
+        * (np.linspace(0, (obj.shape[-2] / 2), num_radii, endpoint=False) + 0.5),
+        device=device,
+    ).type(torch.complex64)
+    dr = r_list[1] - r_list[0]
+    dtheta = 2 * np.pi / obj_polar.shape[-2]
+
+    # utilize einsum to accelerate batched multiplication
+    rdrdtheta = r_list[None, None, :, None, None] * dr * dtheta
+    # psf_roft = (psf_roft[None, None, ...] * rdrdtheta).type(torch.complex64)
+    # img_polar_fft = obj_fft[:, :, None, :, :]
+
+    img_polar_fft = torch.einsum(
+        "bcwtr,bcrtw->bctw",
+        obj_fft[:, :, None, :, :],
+        (psf_roft[None, None, ...]) * rdrdtheta,
+    )
+    img = polar_transform.batchpolar2img(fft.irfft(img_polar_fft, dim=-2), obj.shape)
 
     return img
 
