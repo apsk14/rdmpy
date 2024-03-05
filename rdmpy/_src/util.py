@@ -1,6 +1,7 @@
 """
 Utility methods shared by all files
 """
+
 import os
 import shutil
 
@@ -125,7 +126,7 @@ def get_calib_info(calib_image, dim, fit_params):
             coord_list += [(raw_coord[i, 1] - center[1], center[0] - raw_coord[i, 0])]
 
     calib_image[calib_image < 0] = 0
-    calib_image[calib_image < np.quantile(calib_image, 0.99)] = 0
+    calib_image[calib_image < np.quantile(calib_image, 0.9)] = 0
     calib_image = (calib_image / calib_image.sum()) * len(coord_list)
 
     return coord_list, calib_image
@@ -793,3 +794,16 @@ def split_list(lst, n, idx):
         start = end
 
     return segments[idx], segment_indices[idx]
+
+
+# write a function that generates an (NxN) image which grows linearly from the center to the edges
+def get_radial_mask(N, device=torch.device("cpu")):
+    # initialize an NxN image
+    image = torch.zeros((N, N)).to(device)
+    # loop through each pixel and set it to the distance from the center
+    for i in range(N):
+        for j in range(N):
+            image[i, j] = np.sqrt((i - N / 2) ** 2 + (j - N / 2) ** 2)
+    # normalize the image
+    image = image / torch.max(image)
+    return image

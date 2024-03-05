@@ -1,8 +1,10 @@
 """
 Implements all optimization functions. Primarily used by calibrate.py and deblur.py
 """
+
 import pathlib
 import gc
+import pdb
 
 import numpy as np
 import torch
@@ -19,6 +21,7 @@ from .. import blur
 import gc
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast
+from scipy.ndimage import gaussian_filter
 
 mpl.rcParams["figure.dpi"] = 500
 
@@ -139,19 +142,28 @@ def estimate_coeffs(
 
     if show_psfs:
         psf_est = sum(psfs_estimate) / (len(psfs_estimate))
+        psf_est_mask = psf_est.detach().cpu().clone()
+        psf_est_mask[psf_est_mask > np.quantile(psf_est_mask, 0.99)] = 1
+        psfs_gt = psfs_gt.detach().cpu() * psf_est_mask
+
+        # convolve w gaussian
+        psf_est = gaussian_filter(psf_est.detach().cpu(), sigma=0.7)
 
         plt.subplot(1, 2, 2)
         plt.tight_layout()
         plt.axis("off")
-        plt.imshow(psf_est.detach().cpu(), cmap="inferno")
+        plt.imshow(psf_est, cmap="inferno")
         plt.gca().set_title("Seidel PSFs")
 
         plt.subplot(1, 2, 1)
         plt.tight_layout()
         plt.axis("off")
-        plt.imshow(psfs_gt.detach().cpu(), cmap="inferno")
+        plt.imshow(psfs_gt, cmap="inferno")
         plt.gca().set_title("Measured PSFs")
         plt.show()
+
+        plt.imsave("psfs_gt.svg", psfs_gt**0.8, cmap="inferno")
+        plt.imsave("psfs_est.svg", psf_est**0.8, cmap="inferno")
 
     if fit_params["plot_loss"]:
         plt.figure()
@@ -243,6 +255,7 @@ def image_recon(
         raise NotImplementedError
 
     loss_fn = torch.nn.MSELoss()
+    # loss_fn = torch.nn.L1Loss()
 
     losses = []
 
@@ -253,8 +266,8 @@ def image_recon(
         tqdm(range(opt_params["iters"])) if verbose else range(opt_params["iters"])
     )
 
-    crop = (
-        lambda x: x[
+    crop = lambda x: (
+        x[
             ...,
             opt_params["crop"] : -opt_params["crop"],
             opt_params["crop"] : -opt_params["crop"],
@@ -262,6 +275,11 @@ def image_recon(
         if opt_params["crop"] > 0
         else x
     )
+
+    if opt_params["radial_mask"] is True:
+        radial_mask = util.get_radial_mask(dim[0], device=device)
+    else:
+        radial_mask = 1
 
     for it in iterations:
         # forward pass and loss
@@ -339,16 +357,21 @@ def image_recon(
                 )
 
         loss = (
+            # loss_fn(
+            #     util.normalize(crop(radial_mask * measurement_guess)),
+            #     util.normalize(crop(radial_mask * measurement)),
+            # ) +
             loss_fn(
-                crop(measurement_guess),
-                crop(measurement),
+                crop(radial_mask * measurement_guess),
+                crop(radial_mask * measurement),
             )
-            + tv(crop(estimate), opt_params["tv_reg"])
-            + opt_params["l2_reg"] * torch.norm(estimate)
+            + tv(crop(radial_mask * estimate), opt_params["tv_reg"])
+            + opt_params["l2_reg"] * torch.norm(crop(radial_mask * estimate))
+            + opt_params["l1_reg"] * torch.sum(torch.abs(crop(radial_mask * estimate)))
         )
 
-        # if opt_params["plot_loss"]:
-        #     losses += [loss.detach().cpu()]
+        if opt_params["plot_loss"]:
+            losses += [loss.detach().cpu()]
 
         loss.backward()
         optimizer.step()
@@ -367,7 +390,9 @@ def image_recon(
 
         # project onto [0,1]
         estimate.data[estimate.data < 0] = 0
-        estimate.data[estimate.data > 1] = 1
+        # upper proejction
+        # if opt_params["upper_projection"]:
+        #     estimate.data[estimate.data > 1] = 1
 
     if opt_params["plot_loss"]:
         plt.figure()

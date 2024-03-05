@@ -128,7 +128,7 @@ def calibrate(
     else:
         seidel_coeffs = coeffs
     if verbose:
-        print("Fitted seidel coefficients: " + str(seidel_coeffs.detach().cpu()))
+        print("Fitted seidel coefficients: " + str(seidel_coeffs.abs().detach().cpu()))
 
     if get_psf_data:
         psf_data = get_psfs(
@@ -141,13 +141,13 @@ def calibrate(
             device=device,
         )
 
-        return seidel_coeffs, psf_data
+        return seidel_coeffs.abs(), psf_data
 
     else:
         if get_inter_seidels:
             seidel_coeffs = coeffs
 
-        return seidel_coeffs
+        return seidel_coeffs.abs()
 
 
 def get_psfs(
@@ -156,6 +156,7 @@ def get_psfs(
     model,
     sys_params={},
     downsample=1,
+    psf_data=None,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -206,7 +207,9 @@ def get_psfs(
     if model == "lsi":
         point_list = [(0, 0)]  # just the center PSF
     elif model == "lri":
-        rs = np.linspace(0, (dim / 2), dim, endpoint=False, retstep=False)
+        rs = np.linspace(
+            0, (dim / 2), int(dim // abs(downsample)), endpoint=False, retstep=False
+        )
         point_list = [(r, -r) for r in rs]  # radial line of PSFs
     else:
         raise (NotImplementedError)
@@ -219,17 +222,18 @@ def get_psfs(
     elif model == "lri":
         buffer = 2
 
-    psf_data = seidel.compute_psfs(
-        seidel_coeffs,
-        point_list,
-        sys_params=def_sys_params,
-        polar=(model == "lri"),
-        stack=True,
-        buffer=buffer,
-        downsample=downsample,
-        verbose=verbose,
-        device=device,
-    )
+    if psf_data is None:
+        psf_data = seidel.compute_psfs(
+            seidel_coeffs,
+            point_list,
+            sys_params=def_sys_params,
+            polar=(model == "lri"),
+            stack=True,
+            buffer=buffer,
+            downsample=downsample,
+            verbose=verbose,
+            device=device,
+        )
 
     # prep the PSFs for outputing to the user
     if model == "lsi":

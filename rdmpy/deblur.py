@@ -10,6 +10,8 @@ from .calibrate import get_psfs
 from .dl_models.UNet.UNet import UNet
 from .dl_models.DeepRD.DeepRD import UNet as DeepRD
 
+import pdb
+
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
@@ -17,11 +19,14 @@ dirname = str(pathlib.Path(__file__).parent.absolute())
 def ring_deconvolve(
     image,
     psf_roft,
-    tv_reg=1e-9,
-    l2_reg=1e-9,
+    tv_reg=1e-10,
+    l2_reg=1e-10,
+    l1_reg=0,
+    iters=150,
     opt_params={},
     warm_start=None,
     use_batch_conv=False,
+    radial_mask=False,
     process=True,
     verbose=True,
     device=torch.device("cpu"),
@@ -78,13 +83,15 @@ def ring_deconvolve(
 
     # default optimization parameters
     def_opt_params = {
-        "iters": 300,
+        "iters": iters,
         "optimizer": "adam",
         "lr": 7.5e-2,
         "init": "measurement",
         "crop": 0,
         "tv_reg": tv_reg,
         "l2_reg": l2_reg,
+        "l1_reg": l1_reg,
+        "radial_mask": radial_mask,
         "plot_loss": False,
         "fraction": 0,
     }
@@ -120,6 +127,7 @@ def ring_deconvolve_batch(
     seidel_coeffs,
     tv_reg=1e-9,
     l2_reg=1e-9,
+    l1_reg=1e-9,
     sys_params={},
     opt_params={},
     warm_start=None,
@@ -192,6 +200,7 @@ def ring_deconvolve_batch(
         "crop": 0,
         "tv_reg": tv_reg,
         "l2_reg": l2_reg,
+        "l1_reg": l1_reg,
         "plot_loss": False,
     }
     def_opt_params.update(opt_params)
@@ -220,10 +229,11 @@ def ring_deconvolve_batch(
 def deeprd(
     image,
     seidel_coeffs,
-    sharpness=1.5,
+    sharpness=1.25,
     model_path=None,
     process=True,
     verbose=True,
+    deconvolved=None,
     device=torch.device("cpu"),
 ):
     """
@@ -285,7 +295,7 @@ def deeprd(
             if verbose:
                 print('Using pretrained model "deeprd_512"')
 
-        elif model_path == 1024:
+        elif image.shape[0] == 1024:
             model_path = "dl_models/pretrained/deeprd_1024"
             if verbose:
                 print('Using pretrained model "deeprd_1024"')
@@ -298,19 +308,23 @@ def deeprd(
 
     model = util.load_model(model_seidelnet, ckpt_path, device=device)
 
-    center_psf = get_psfs(
-        seidel_coeffs=seidel_coeffs, dim=image.shape[0], model="lsi", device=device
-    )
+    if deconvolved is None:
+        center_psf = get_psfs(
+            seidel_coeffs=seidel_coeffs, dim=image.shape[0], model="lsi", device=device
+        )
 
-    deconvolved = deconvolve(image, center_psf, method="wiener", device=device)
-    deconvolved = deconvolved.to(device)
+        deconvolved = deconvolve(image, center_psf, method="wiener", device=device)
+        deconvolved = deconvolved.to(device)
+    else:
+        if not torch.is_tensor(deconvolved):
+            deconvolved = torch.tensor(deconvolved)
+        if deconvolved.device is not device:
+            deconvolved = deconvolved.to(device)
 
     if verbose:
         print("deblurring...")
 
-    input = torch.stack((image.float() - 0.5, deconvolved.float() - 0.5)).cuda(
-        device=device
-    )
+    input = torch.stack((image.float() - 0.5, deconvolved.float() - 0.5))
     output = torch.clip(model(input, sharpness * seidel_coeffs.T) + 0.5, 0, 1)
     recon = util.tensor_to_np(output)
 
@@ -323,6 +337,9 @@ def deconvolve(
     method="wiener",
     tv_reg=1e-9,
     l2_reg=1e-9,
+    l1_reg=1e-9,
+    iters=150,
+    radial_mask=False,
     balance=3e-4,
     opt_params={},
     process=True,
@@ -384,13 +401,15 @@ def deconvolve(
 
     # default optimization parameters
     def_opt_params = {
-        "iters": 100,
+        "iters": iters,
         "optimizer": "adam",
         "lr": 7.5e-2,
         "init": "measurement",
         "crop": 0,
         "tv_reg": tv_reg,
         "l2_reg": l2_reg,
+        "l1_reg": l1_reg,
+        "radial_mask": radial_mask,
         "plot_loss": False,
         "balance": balance,
     }
@@ -441,6 +460,7 @@ def blind(
     balance=3e-4,
     opt_params={},
     sys_params={},
+    iters=100,
     process=True,
     verbose=True,
     device=torch.device("cpu"),
@@ -486,7 +506,7 @@ def blind(
     """
 
     def_opt_params = {
-        "iters": 100,
+        "iters": iters,
         "optimizer": "adam",
         "lr": 7.5e-2,
         "init": "measurement",

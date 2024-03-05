@@ -81,8 +81,8 @@ class InferenceUNet(nn.Module):
             batch_blur, batch_lsi = x[batch_idx]
             batch_polar = torch.stack(
                 (
-                    polar_transform.img2polar(batch_blur, 512),
-                    polar_transform.img2polar(batch_lsi, 512),
+                    polar_transform.img2polar(batch_blur, 512, a_sampling=2),
+                    polar_transform.img2polar(batch_lsi, 512, a_sampling=2),
                 )
             )
             x_polar[batch_idx] = batch_polar

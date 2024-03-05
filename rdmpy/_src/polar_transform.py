@@ -90,6 +90,7 @@ def img2polar(
     finalAngle=np.pi * 2,
     center=None,
     border="constant",
+    a_sampling=4,
 ):
     """
     Converts cartesian image to polar image
@@ -143,7 +144,7 @@ def img2polar(
 
     if maxSize > 700:
         numAngles = int(
-            3 * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
+            a_sampling * np.max(img.shape) * ((finalAngle - initialAngle) / (2 * np.pi))
         )
     else:
         numAngles = int(
@@ -392,6 +393,7 @@ def batchimg2polar(
     finalAngle=np.pi * 2,
     center=None,
     border="constant",
+    a_sampling=4,
 ):
     """
     Converts batch of cartesian images to polar image.
@@ -445,7 +447,9 @@ def batchimg2polar(
 
     if maxSize > 700:
         numAngles = int(
-            2 * np.max(img.shape[2:]) * ((finalAngle - initialAngle) / (2 * np.pi))
+            a_sampling
+            * np.max(img.shape[2:])
+            * ((finalAngle - initialAngle) / (2 * np.pi))
         )
     else:
         numAngles = int(

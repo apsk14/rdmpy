@@ -3,6 +3,7 @@ This file contains functions for computing PSFs from seidel coefficients.
 """
 
 import pathlib
+import pdb
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ from torch.nn.functional import interpolate
 
 import matplotlib as mpl
 from tqdm import tqdm
+from torchvision.transforms.functional import gaussian_blur
 
 from . import util, polar_transform
 
@@ -156,24 +158,28 @@ def compute_psfs(
             if samples > 700:
                 desired_psfs = torch.zeros(
                     (
-                        samples // downsample,
-                        samples // downsample * 3 + buffer,
-                        samples // downsample,
+                        int(samples // downsample),
+                        int(samples // downsample) * 4 + buffer,
+                        int(samples // downsample),
                     ),
                     device=device,
                 )  # add two extra rows for RoFT later
             else:
                 desired_psfs = torch.zeros(
                     (
-                        samples // downsample,
-                        samples // downsample * 4 + buffer,
-                        samples // downsample,
+                        int(samples // downsample),
+                        int(samples // downsample) * 4 + buffer,
+                        int(samples // downsample),
                     ),
                     device=device,
                 )  # add two extra rows for RoFT later
         else:
             desired_psfs = torch.zeros(
-                (samples // downsample, samples // downsample, samples // downsample),
+                (
+                    int(samples // downsample),
+                    int(samples // downsample),
+                    int(samples // downsample),
+                ),
                 device=device,
             )
     else:
@@ -192,31 +198,34 @@ def compute_psfs(
         curr_psf = torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(H)))
         del H
         curr_psf = torch.square(torch.abs(curr_psf))
-        curr_psf = curr_psf / curr_psf.sum()
-
+        # apply a gaussian blur to the psf
+        # curr_psf = gaussian_blur(curr_psf[None, :, :], kernel_size=3, sigma=3).squeeze()
+        # pdb.set_trace()
         curr_psf = util.shift_torch(
             curr_psf,
             (-(point[1].cpu().numpy()), (point[0].cpu().numpy())),
-            mode="bicubic",
+            mode="bilinear",
         )
-        # curr_psf = block_reduce(curr_psf, block_size=[2, 2], func=np.mean)
-        if downsample > 1:
+        if downsample != 1:
             curr_psf = interpolate(
                 curr_psf.unsqueeze(0).unsqueeze(0),
                 scale_factor=1 / downsample,
                 mode="bilinear",
-            )
+            ).squeeze()
+        # curr_psf = block_reduce(curr_psf, block_size=[2, 2], func=np.mean)
+
+        curr_psf = curr_psf / curr_psf.sum()
 
         if polar:
             curr_psf = polar_transform.img2polar(
-                curr_psf.float(), numRadii=dim // downsample
+                curr_psf.float(), numRadii=int(dim // downsample)
             )
         if stack:
             # desired_psfs[idx] = curr_psf
             if buffer > 0:
-                desired_psfs[
-                    idx, :-buffer, :
-                ] = curr_psf  # Leaving two extra rows for RoFT later
+                desired_psfs[idx, :-buffer, :] = (
+                    curr_psf  # Leaving two extra rows for RoFT later
+                )
             else:
                 desired_psfs[idx] = curr_psf
         else:

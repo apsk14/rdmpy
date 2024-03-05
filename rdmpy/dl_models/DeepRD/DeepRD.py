@@ -3,6 +3,7 @@ Implementation of DeepRD.
 DeepRD uses HyperNetworks to generate spatially-varying convolutional filters.
 Adapted from https://github.com/SecretMG/UNet-for-Image-Denoising, https://github.com/g1910/HyperNetworks
 """
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -11,6 +12,7 @@ from .hypernetwork_modules import HyperNetwork
 from .InferenceUNET import InferenceUNet
 import math
 from ..._src import polar_transform
+import pdb
 
 
 class DoubleConv(nn.Module):
@@ -24,6 +26,7 @@ class DoubleConv(nn.Module):
         self.k, self.h = in_channels // hyper_out_size, out_channels // hyper_out_size
 
         self.seidel_block = self.k * self.h > 0
+        # self.seidel_block = False
 
         if not self.seidel_block:
             self.seidel_block = False
@@ -304,8 +307,8 @@ class UNet(nn.Module):
             batch_blur, batch_lsi = x[batch_idx]
             batch_polar = torch.stack(
                 (
-                    polar_transform.img2polar(batch_blur, resolution),
-                    polar_transform.img2polar(batch_lsi, resolution),
+                    polar_transform.img2polar(batch_blur, resolution, a_sampling=2),
+                    polar_transform.img2polar(batch_lsi, resolution, a_sampling=2),
                 )
             )
             # print("BATCH POLAR SHAPE:", batch_polar.shape, "X SHAPE:", x_polar.shape)
