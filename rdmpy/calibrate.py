@@ -3,7 +3,6 @@
 import numpy as np
 import torch
 import torch.fft as fft
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 from ._src import opt, seidel, util
@@ -45,6 +44,9 @@ def calibrate(
     get_psf_data : bool, optional
         Whether to return the PSFs or just the seidel coefficients.
 
+    num_seidel : int, optional
+        Number of Seidel coefficients to fit. Default is 4 (excludes distortion and defocus by default)
+
     fit_params : dict, optional
         Parameters for the seidel fitting procedure. See `opt.py` for details.
 
@@ -77,11 +79,12 @@ def calibrate(
 
     # default parameters which describe the optical system.
     def_sys_params = {
-        "samples": dim,
-        "L": 1e-3,
-        "lamb": 0.55e-6,
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
+        "samples": dim,  # desired sidelength of each PSF image
+        "L": 1e-3,  # size of the PSF in the object plane
+        "lamb": 0.55e-6,  # wavelength of light
+        "pupil_radius": ((dim) * (0.55e-6) * (100e-3))
+        / (4 * (1e-3)),  # radius of the pupil
+        "z": 100e-3,  # distance from the pupil to the object plane
     }
 
     def_sys_params.update(sys_params)
@@ -92,19 +95,22 @@ def calibrate(
 
     # parameters which are used for the seidel fitting procedure
     def_fit_params = {
-        "sys_center": [calib_image.shape[0] // 2, calib_image.shape[1] // 2],
-        "centered_psf": False,
-        "min_distance": 30,
-        "threshold": 0.2,
-        "disk": 2,
-        "num_seidel": num_seidel,
-        "init": "zeros",
-        "seidel_init": None,
-        "iters": 300,
-        "lr": 1e-2,
-        "reg": 0,
-        "plot_loss": False,
-        "get_inter_seidels": False,
+        "sys_center": [
+            calib_image.shape[0] // 2,
+            calib_image.shape[1] // 2,
+        ],  # center of the system
+        "centered_psf": False,  # whether there is a PSF that is centered in the calibration image
+        "min_distance": 30,  # minimum distance between fitted PSFs
+        "threshold": 0.2,  # threshold for detecting PSFs
+        "disk": 2,  # disk size for detecting PSFs (make smaller if PSFs are very small (only a few pixels))
+        "num_seidel": num_seidel,  # number of seidel coefficients to fit, up to 6
+        "init": "zeros",  # initialization scheme for the seidel coefficients
+        "seidel_init": None,  # direct initialization for the seidel coefficients
+        "iters": 300,  # number of iterations for the fitting procedure
+        "lr": 1e-2,  # learning rate for the fitting procedure
+        "reg": 0,  # regularization for the fitting procedure
+        "plot_loss": False,  # whether to plot the loss during the fitting procedure
+        "get_inter_seidels": False,  # whether to return intermediate seidel coefficients
     }
     def_fit_params.update(fit_params)
 
@@ -179,6 +185,9 @@ def get_psfs(
     downsample : int, optional
         Factor by which to downsample the PSFs after fitting. Useful for saving memory.
 
+    psf_data : torch.Tensor, optional
+        Precomputed PSFs. If not provided, will be computed.
+
     verbose : bool, optional
 
     device : torch.device, optional
@@ -193,11 +202,12 @@ def get_psfs(
 
     # default parameters which describe the optical system.
     def_sys_params = {
-        "samples": dim,
-        "L": 1e-3,
-        "lamb": 0.55e-6,
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
+        "samples": dim,  # desired sidelength of each PSF image
+        "L": 1e-3,  # size of the PSF in the object plane
+        "lamb": 0.55e-6,  # wavelength of light
+        "pupil_radius": ((dim) * (0.55e-6) * (100e-3))
+        / (4 * (1e-3)),  # radius of the pupil
+        "z": 100e-3,  # distance from the pupil to the object plane
     }
     def_sys_params.update(sys_params)
 
@@ -247,13 +257,5 @@ def get_psfs(
 
         del temp_rft
         gc.collect()
-
-        # add together the real and imaginary parts of the RoFTs
-        # psf_data = (
-        #     psf_data[:, 0 : psf_data.shape[1] // 2, :]
-        #     + 1j * psf_data[:, psf_data.shape[1] // 2 :, :]
-        # )
-        # gc.collect()
-        # torch.cuda.empty_cache()
 
     return psf_data

@@ -15,36 +15,37 @@ from skimage.morphology import erosion, disk
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from cv2 import VideoWriter, VideoWriter_fourcc
+
+# from cv2 import VideoWriter, VideoWriter_fourcc
 
 PLT_SIZE = 5
 
 
-def write_video(path, array, fps=float(24)):
-    """
-    Writes a video from stack of images
+# def write_video(path, array, fps=float(24)):
+#     """
+#     Writes a video from stack of images
 
-    Parameters
-    ----------
-    path : str
-        Path to save video to.
+#     Parameters
+#     ----------
+#     path : str
+#         Path to save video to.
 
-    array : np.ndarray
-        Stack of frames to convert to video.
+#     array : np.ndarray
+#         Stack of frames to convert to video.
 
-    fps : float, optional
-        Frames per second of video.
+#     fps : float, optional
+#         Frames per second of video.
 
-    Returns
-    -------
-    None
-    """
+#     Returns
+#     -------
+#     None
+#     """
 
-    fourcc = VideoWriter_fourcc(*"mp4v")
-    video = VideoWriter(path, fourcc, fps, (array.shape[2], array.shape[1]), False)
-    for i in range(array.shape[0]):
-        video.write((array[i, :, :] * 255).astype(np.uint8))
-    video.release()
+#     fourcc = VideoWriter_fourcc(*"mp4v")
+#     video = VideoWriter(path, fourcc, fps, (array.shape[2], array.shape[1]), False)
+#     for i in range(array.shape[0]):
+#         video.write((array[i, :, :] * 255).astype(np.uint8))
+#     video.release()
 
 
 def get_calib_info(calib_image, dim, fit_params):

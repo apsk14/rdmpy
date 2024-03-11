@@ -11,7 +11,6 @@ from torch.nn.functional import interpolate
 
 import matplotlib as mpl
 from tqdm import tqdm
-from torchvision.transforms.functional import gaussian_blur
 
 from . import util, polar_transform
 

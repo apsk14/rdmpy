@@ -93,7 +93,7 @@ def ring_convolve_fractional(
 ):
     """
 
-    Returns the ring convolution of an object with a stack of PSFs.
+    Returns a fraction of the ring convolution of an object with a stack of PSFs.
 
     Parameters
     ----------
@@ -160,9 +160,6 @@ def ring_convolve_fractional(
         )
         rs = rs + 1
         del curr_psf_polar_fft
-
-    # img_polar = fft.irfft(img_polar_fft, dim=0)
-    # img = polar_transform.polar2img(img_polar, obj.shape)
 
     return img_polar_fft
 

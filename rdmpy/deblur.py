@@ -7,10 +7,7 @@ import torch
 
 from ._src import opt, util
 from .calibrate import get_psfs
-from .dl_models.UNet.UNet import UNet
 from .dl_models.DeepRD.DeepRD import UNet as DeepRD
-
-import pdb
 
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
@@ -26,8 +23,8 @@ def ring_deconvolve(
     opt_params={},
     warm_start=None,
     use_batch_conv=False,
-    radial_mask=False,
     process=True,
+    hot_pixel=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -45,13 +42,19 @@ def ring_deconvolve(
         M is the number of angles, and is L is number of radii the in the RoFT.
 
     tv_reg : float, optional
-        The TV regularization parameter. Default is 1e-10.
+        The Total Variation regularization parameter. Default is 1e-10.
 
     l2_reg : float, optional
-        The L2 regularization parameter. Default is 1e-10.
+        The L2 norm regularization parameter. Default is 1e-10.
+
+    l1_reg : float, optional
+        The L1 norm regularization parameter. Default is 0.
+
+    iters : int, optional
+        The number of iterations to run the optimization. Default is 150.
 
     opt_params : dict, optional
-        The optimization/regularization parameters to use for deconvolution.
+        Ad optimization/regularization parameters to use for deconvolution.
         See `opt.py` for details.
 
     use_batch_conv : bool, optional
@@ -59,6 +62,9 @@ def ring_deconvolve(
 
     process : bool, optional
         Whether to process the image before deconvolution. Default is True.
+
+    hot_pixel : bool, optional
+        Whether to remove hot pixels from the image. Default is False.
 
     verbose : bool, optional
         Whether to display a progress bar.
@@ -83,22 +89,22 @@ def ring_deconvolve(
 
     # default optimization parameters
     def_opt_params = {
-        "iters": iters,
-        "optimizer": "adam",
-        "lr": 7.5e-2,
-        "init": "measurement",
-        "crop": 0,
-        "tv_reg": tv_reg,
-        "l2_reg": l2_reg,
-        "l1_reg": l1_reg,
-        "radial_mask": radial_mask,
-        "plot_loss": False,
-        "fraction": 0,
+        "iters": iters,  # number of iterations to run the optimization
+        "optimizer": "adam",  # which optimizer to use for the iterative optimization
+        "lr": 7.5e-2,  # learning rate of the optimizer
+        "init": "measurement",  # initialization of the reconstruction before optimization
+        "crop": 0,  # How much to crop out when considering the optimization loss
+        "tv_reg": tv_reg,  # Total variation regularization parameter
+        "l2_reg": l2_reg,  # L2 norm regularization parameter
+        "l1_reg": l1_reg,  # L1 norm regularization parameter
+        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
+        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
+        "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
     }
     def_opt_params.update(opt_params)
 
     if process:
-        image = util.process(image, dim=image.shape[-2:]) * 0.9
+        image = util.process(image, dim=image.shape[-2:], hot_pix=hot_pixel) * 0.9
 
     if not torch.is_tensor(image):
         image = torch.tensor(image)
@@ -122,116 +128,13 @@ def ring_deconvolve(
     return recon
 
 
-def ring_deconvolve_batch(
-    image,
-    seidel_coeffs,
-    tv_reg=1e-9,
-    l2_reg=1e-9,
-    l1_reg=1e-9,
-    sys_params={},
-    opt_params={},
-    warm_start=None,
-    use_batch_conv=False,
-    process=True,
-    verbose=True,
-    device=torch.device("cpu"),
-):
-    """
-    Ring deconvolves an image with a stack of PSFs.
-
-    Parameters
-    ----------
-    image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (N,N).
-
-    psf_roft : torch.Tensor
-        The stack of PSFs to deconvolve the image with. The PSFs should be in the
-        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
-        M is the number of angles, and is L is number of radii the in the RoFT.
-
-    tv_reg : float, optional
-        The TV regularization parameter. Default is 1e-10.
-
-    l2_reg : float, optional
-        The L2 regularization parameter. Default is 1e-10.
-
-    opt_params : dict, optional
-        The optimization/regularization parameters to use for deconvolution.
-        See `opt.py` for details.
-
-    process : bool, optional
-        Whether to process the image before deconvolution. Default is True.
-
-    verbose : bool, optional
-        Whether to display a progress bar.
-
-    device : torch.device, optional
-        The device to use for the computation.
-
-    Returns
-    -------
-    recon : torch.Tensor
-        The ring deconvolved image. Will be (N,N).
-
-    Notes
-    -----
-    An implementation of `Ring Deconvolution Microscopy:
-    An Exact Solution for Spatially-Varying Aberration Correction"
-    https://arxiv.org/abs/2206.08928
-
-    """
-    dim = image.shape[0]
-
-    def_sys_params = {
-        "samples": dim,
-        "L": 1e-3,
-        "lamb": 0.55e-6,
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
-    }
-    def_sys_params.update(sys_params)
-
-    # default optimization parameters
-    def_opt_params = {
-        "iters": 300,
-        "optimizer": "adam",
-        "lr": 7.5e-2,
-        "init": "measurement",
-        "crop": 0,
-        "tv_reg": tv_reg,
-        "l2_reg": l2_reg,
-        "l1_reg": l1_reg,
-        "plot_loss": False,
-    }
-    def_opt_params.update(opt_params)
-
-    if process:
-        image = util.process(image, dim=image.shape) * 0.9
-
-    if not torch.is_tensor(image):
-        image = torch.tensor(image)
-    if image.device is not device:
-        image = image.to(device)
-
-    recon = opt.image_recon_batch(
-        image.float(),
-        seidel_coeffs,
-        sys_params=def_sys_params,
-        opt_params=def_opt_params,
-        use_batch_conv=True,
-        device=device,
-        verbose=verbose,
-    )
-
-    return recon
-
-
 def deeprd(
     image,
     seidel_coeffs,
     sharpness=1.25,
     model_path=None,
     process=True,
+    hot_pixel=False,
     verbose=True,
     deconvolved=None,
     device=torch.device("cpu"),
@@ -243,13 +146,14 @@ def deeprd(
     Parameters
     ----------
     image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (N,N).
+        The image to be deconvolved. Must be either (512,512) or (1024, 1024).
 
     seidel_coeffs : torch.Tensor
         The Seidel coefficient of the system
 
     sharpness : float, optional
-        The sharpness parameter for the DeepRD model. Default is 1.5.
+        The sharpness parameter for the DeepRD model. Scales the Seidel coefficients to account for out-of-distribution data.
+        Default is 1.5.
 
     model_path : str, optional
         The path to the pretrained DeepRD model. Default is
@@ -258,8 +162,14 @@ def deeprd(
     process : bool, optional
         Whether to process the image before deconvolution. Default is True.
 
+    hot_pixel : bool, optional
+        Whether to remove hot pixels from the image. Default is False.
+
     verbose : bool, optional
         Whether to print updates.
+
+    deconvolved : np.ndarray or torch.Tensor, optional
+        The standard deconvolved image for initialization. If not provided, it will be computed using the center Seidel PSF.
 
     device : torch.device, optional
         The device to use for the computation.
@@ -272,7 +182,7 @@ def deeprd(
     """
 
     if process:
-        image = util.process(image, dim=image.shape) * 0.9
+        image = util.process(image, dim=image.shape, hot_pix=hot_pixel) * 0.9
 
     if not torch.is_tensor(image):
         image = torch.tensor(image)
@@ -339,10 +249,10 @@ def deconvolve(
     l2_reg=1e-9,
     l1_reg=1e-9,
     iters=150,
-    radial_mask=False,
     balance=3e-4,
     opt_params={},
     process=True,
+    hot_pixel=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -401,22 +311,22 @@ def deconvolve(
 
     # default optimization parameters
     def_opt_params = {
-        "iters": iters,
-        "optimizer": "adam",
-        "lr": 7.5e-2,
-        "init": "measurement",
-        "crop": 0,
-        "tv_reg": tv_reg,
-        "l2_reg": l2_reg,
-        "l1_reg": l1_reg,
-        "radial_mask": radial_mask,
-        "plot_loss": False,
-        "balance": balance,
+        "iters": iters,  # number of iterations to run the optimization
+        "optimizer": "adam",  # which optimizer to use for the iterative optimization
+        "lr": 7.5e-2,  # learning rate of the optimizer
+        "init": "measurement",  # initialization of the reconstruction before optimization
+        "crop": 0,  # How much to crop out when considering the optimization loss
+        "tv_reg": tv_reg,  # Total variation regularization parameter
+        "l2_reg": l2_reg,  # L2 norm regularization parameter
+        "l1_reg": l1_reg,  # L1 norm regularization parameter
+        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
+        "balance": balance,  # The balance parameter for the wiener filter
+        "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
     }
     def_opt_params.update(opt_params)
 
     if process:
-        image = util.process(image, dim=image.shape) * 0.9
+        image = util.process(image, dim=image.shape, hot_pix=hot_pixel) * 0.9
 
     if not torch.is_tensor(image):
         image = torch.tensor(image)
@@ -458,10 +368,11 @@ def blind(
     image,
     get_psf=False,
     balance=3e-4,
+    iters=100,
     opt_params={},
     sys_params={},
-    iters=100,
     process=True,
+    hot_pixel=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
@@ -480,6 +391,9 @@ def blind(
     balance : float, optional
         The balance parameter for the wiener filter. Default is 3e-4.
 
+    iters : int, optional
+        The number of iterations to run the optimization. Default is 100.
+
     opt_params : dict, optional
         The optimization/regularization parameters to use for deconvolution.
 
@@ -488,6 +402,9 @@ def blind(
 
     process : bool, optional
         Whether to process the image before deconvolution. Default is True.
+
+    hot_pixel : bool, optional
+        Whether to remove hot pixels from the image. Default is False.
 
     verbose : bool, optional
         Whether to display a progress bar (only for 'iter')
@@ -506,16 +423,16 @@ def blind(
     """
 
     def_opt_params = {
-        "iters": iters,
-        "optimizer": "adam",
-        "lr": 7.5e-2,
-        "init": "measurement",
-        "seidel_init": None,
-        "crop": 0,
-        "balance": balance,
-        "plot_loss": False,
-        "get_inter_seidels": False,
-        "get_inter_recons": False,
+        "iters": iters,  # number of iterations to run the optimization
+        "optimizer": "adam",  # which optimizer to use for the iterative optimization
+        "lr": 7.5e-2,  # learning rate of the optimizer
+        "init": "measurement",  # initialization of the reconstruction before optimization
+        "seidel_init": None,  # initialization of the seidel coefficients before optimization
+        "crop": 0,  # How much to crop out when considering the optimization loss
+        "balance": balance,  # The balance parameter for the wiener filter
+        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
+        "get_inter_seidels": False,  # Whether to return the intermediate seidel coefficients
+        "get_inter_recons": False,  # Whether to return the intermediate reconstructions
     }
     def_opt_params.update(opt_params)
 
@@ -529,7 +446,7 @@ def blind(
     def_sys_params.update(sys_params)
 
     if process:
-        image = util.process(image, dim=image.shape) * 0.9
+        image = util.process(image, dim=image.shape, hot_pix=hot_pixel) * 0.9
 
     if not torch.is_tensor(image):
         image = torch.tensor(image).float()

@@ -4,7 +4,6 @@ Implements all optimization functions. Primarily used by calibrate.py and deblur
 
 import pathlib
 import gc
-import pdb
 
 import numpy as np
 import torch
@@ -146,13 +145,10 @@ def estimate_coeffs(
         psf_est_mask[psf_est_mask > np.quantile(psf_est_mask, 0.99)] = 1
         psfs_gt = psfs_gt.detach().cpu() * psf_est_mask
 
-        # convolve w gaussian
-        psf_est = gaussian_filter(psf_est.detach().cpu(), sigma=0.7)
-
         plt.subplot(1, 2, 2)
         plt.tight_layout()
         plt.axis("off")
-        plt.imshow(psf_est, cmap="inferno")
+        plt.imshow(psf_est.detach().cpu(), cmap="inferno")
         plt.gca().set_title("Seidel PSFs")
 
         plt.subplot(1, 2, 1)
@@ -161,9 +157,6 @@ def estimate_coeffs(
         plt.imshow(psfs_gt, cmap="inferno")
         plt.gca().set_title("Measured PSFs")
         plt.show()
-
-        plt.imsave("psfs_gt.svg", psfs_gt**0.8, cmap="inferno")
-        plt.imsave("psfs_est.svg", psf_est**0.8, cmap="inferno")
 
     if fit_params["plot_loss"]:
         plt.figure()
@@ -276,11 +269,6 @@ def image_recon(
         else x
     )
 
-    if opt_params["radial_mask"] is True:
-        radial_mask = util.get_radial_mask(dim[0], device=device)
-    else:
-        radial_mask = 1
-
     for it in iterations:
         # forward pass and loss
         if model == "lsi":
@@ -291,7 +279,7 @@ def image_recon(
             )[0, 0]
         else:
             # with autocast():
-            if opt_params["fraction"] > 0:
+            if opt_params["fraction"] is True:
                 measurement_guess_1 = checkpoint(
                     (
                         lambda x, y: blur.ring_convolve_fractional(
@@ -357,17 +345,13 @@ def image_recon(
                 )
 
         loss = (
-            # loss_fn(
-            #     util.normalize(crop(radial_mask * measurement_guess)),
-            #     util.normalize(crop(radial_mask * measurement)),
-            # ) +
             loss_fn(
-                crop(radial_mask * measurement_guess),
-                crop(radial_mask * measurement),
+                crop(measurement_guess),
+                crop(measurement),
             )
-            + tv(crop(radial_mask * estimate), opt_params["tv_reg"])
-            + opt_params["l2_reg"] * torch.norm(crop(radial_mask * estimate))
-            + opt_params["l1_reg"] * torch.sum(torch.abs(crop(radial_mask * estimate)))
+            + tv(crop(estimate), opt_params["tv_reg"])
+            + opt_params["l2_reg"] * torch.norm(crop(estimate))
+            + opt_params["l1_reg"] * torch.sum(torch.abs(crop(estimate)))
         )
 
         if opt_params["plot_loss"]:
@@ -376,23 +360,12 @@ def image_recon(
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
-        # loss.backward()
-        # # del loss
-        # # del measurement_guess
-        # # with torch.cuda.device("cuda:1"):
-        # #     torch.cuda.empty_cache()
-
-        # # backward
-        # # if (it + 1) % 10 == 0:
-        # #     # every 10 iterations of batches of size 10
-        # optimizer.step()
-        # optimizer.zero_grad(set_to_none=True)
 
         # project onto [0,1]
         estimate.data[estimate.data < 0] = 0
         # upper proejction
-        # if opt_params["upper_projection"]:
-        #     estimate.data[estimate.data > 1] = 1
+        if opt_params["upper_projection"]:
+            estimate.data[estimate.data > 1] = 1
 
     if opt_params["plot_loss"]:
         plt.figure()
