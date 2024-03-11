@@ -45,7 +45,7 @@ Main packages:
 * jupyter 1.0.0
 
 If you would like to install from scratch, please follow these steps using Anaconda:
-1) If you don't already have Anaconda or another package manager installed, we recommend [Miniconda] (https://docs.anaconda.com/free/miniconda/miniconda-install/),
+1) If you don't already have Anaconda or another package manager installed, we recommend [Miniconda](https://docs.anaconda.com/free/miniconda/miniconda-install/),
 2) Create a new environment ```conda create -n "rdm" python=3.8.5```
 3) Install pytorch first! This is important as it will make the rest smoother and will mean less total installs. ```conda install pytorch=1.8.1 pytorch-cuda=11.8 -c pytorch -c nvidia```. If you plan to only use cpu (not recommended), you can drop the pytorch-cuda part.
 4) Next, conda install scipy=1.6.2, scikit-image (this may be slow), matplotlib=3.2.2, tqdm, and jupyter.
@@ -57,9 +57,9 @@ After that, we are ready to run some rdmpy! You can immediately try out demo.ipy
 
 Disclaimer: All jupyter notebooks can also just be viewed if the reader does not or cannot run them. 
 
-For a walkthrough and instructions of the basic utility of this package please see ```demo.ipynb```. Depending on the notebook and computational resources available, this notebook should take more than a 10-15 minutes to run. On a linux server with a single Nvidia A6000 GPU, it will completely run in a few minutes. 
+For a walkthrough and instructions of the basic utility of this package please see ```demo.ipynb```. Depending on the notebook and computational resources available, this notebook should take no more than 10-15 minutes to run. On a linux server with a single Nvidia RTX A6000 GPU, it will completely run in a few minutes. 
 
-For more advanced useage, navigate to experiments/ and run ```bash get_data.sh "experiment_name"``` where the experiment name can be either mmf, miniscope, or multicolor. The open up the corresponding jupyter notebook and have fun! MMF is quite small and runs easily on any system. The other 2 require large gpus (>25GB Ram) to operate quickly at full scale. Moreover, they will require ~8GB of storage for the data. 
+For more advanced useage, navigate to experiments/ and run ```bash get_data.sh experiment_name``` where experiment_name can be either mmf, miniscope, or multicolor. For example, ```bash get_data.sh mmf```. The open up the corresponding jupyter notebook and have fun! MMF is quite small and runs easily on any system. The other 2 require large gpus (>25GB Ram) to operate quickly at full scale. Moreover, they will require ~8GB of storage for the data. 
 
 Comprehensive documentation for rdmpy can be found in ```calibrate.py```, ```blur.py```, and ```deblur.py```. Each function is fully documented within those files under the function headers. 
 
