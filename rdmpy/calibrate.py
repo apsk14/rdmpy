@@ -79,19 +79,15 @@ def calibrate(
 
     # default parameters which describe the optical system.
     def_sys_params = {
-        "samples": dim,  # desired sidelength of each PSF image
-        "L": 1e-3,  # size of the PSF in the object plane
-        "lamb": 0.55e-6,  # wavelength of light
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3))
-        / (4 * (1e-3)),  # radius of the pupil
-        "z": 100e-3,  # distance from the pupil to the object plane
+        "samples": dim,
+        "L": 0,
+        "lamb": 0.55e-6,
+        "NA": 0.5,
     }
+    radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+    def_sys_params["L"] = ((dim) * (def_sys_params["lamb"])) / (4 * (radius_over_z))
 
     def_sys_params.update(sys_params)
-
-    def_sys_params["pupil_radius"] = (
-        (def_sys_params["samples"]) * (def_sys_params["lamb"]) * (def_sys_params["z"])
-    ) / (4 * (def_sys_params["L"]))
 
     # parameters which are used for the seidel fitting procedure
     def_fit_params = {
@@ -146,14 +142,13 @@ def calibrate(
             verbose=verbose,
             device=device,
         )
-
         return seidel_coeffs.abs(), psf_data
 
     else:
         if get_inter_seidels:
             seidel_coeffs = coeffs
 
-        return seidel_coeffs.abs()
+    return seidel_coeffs
 
 
 def get_psfs(
@@ -202,13 +197,13 @@ def get_psfs(
 
     # default parameters which describe the optical system.
     def_sys_params = {
-        "samples": dim,  # desired sidelength of each PSF image
-        "L": 1e-3,  # size of the PSF in the object plane
-        "lamb": 0.55e-6,  # wavelength of light
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3))
-        / (4 * (1e-3)),  # radius of the pupil
-        "z": 100e-3,  # distance from the pupil to the object plane
+        "samples": dim,
+        "L": 0,
+        "lamb": 0.55e-6,
+        "NA": 0.5,
     }
+    radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+    def_sys_params["L"] = ((dim) * (def_sys_params["lamb"])) / (4 * (radius_over_z))
     def_sys_params.update(sys_params)
 
     if not torch.is_tensor(seidel_coeffs):

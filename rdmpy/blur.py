@@ -206,11 +206,12 @@ def ring_convolve_batch(
 
     def_sys_params = {
         "samples": dim,
-        "L": 1e-3,
+        "L": 0,
         "lamb": 0.55e-6,
-        "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
+        "NA": 0.5,
     }
+    radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+    def_sys_params["L"] = ((dim) * (def_sys_params["lamb"])) / (4 * (radius_over_z))
     def_sys_params.update(sys_params)
 
     # get object RoFT
@@ -376,11 +377,14 @@ def full(obj, seidel_coeffs, sys_params={}, verbose=False, device=torch.device("
 
     def_sys_params = {
         "samples": obj.shape[0],
-        "L": 1e-3,
+        "L": 0,
         "lamb": 0.55e-6,
-        "pupil_radius": ((obj.shape[0]) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
+        "NA": 0.5,
     }
+    radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+    def_sys_params["L"] = ((obj.shape[0]) * (def_sys_params["lamb"])) / (
+        4 * (radius_over_z)
+    )
     def_sys_params.update(sys_params)
 
     seidel_coeffs = torch.tensor(seidel_coeffs)

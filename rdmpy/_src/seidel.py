@@ -122,11 +122,12 @@ def compute_psfs(
     else:
         def_sys_params = {
             "samples": dim,
-            "L": 1e-3,
+            "L": 0,
             "lamb": 0.55e-6,
-            "pupil_radius": ((dim) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-            "z": 100e-3,
+            "NA": 0.5,
         }
+        radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+        def_sys_params["L"] = ((dim) * (def_sys_params["lamb"])) / (4 * (radius_over_z))
 
         def_sys_params.update(sys_params)
         sys_params = def_sys_params
@@ -143,12 +144,11 @@ def compute_psfs(
     L = sys_params["L"]
     dt = L / samples
     lamb = sys_params["lamb"]
+    radius_over_z = np.tan(np.arcsin(sys_params["NA"]))
     k = (2 * np.pi) / lamb
-    pupil_radius = sys_params["pupil_radius"]
-    z = sys_params["z"]
     fx = np.linspace(-1 / (2 * dt), 1 / (2 * dt), samples)
     [Fx, Fy] = torch.tensor(np.meshgrid(fx, fx), device=device)
-    scale_factor = (lamb * z) / pupil_radius
+    scale_factor = lamb / radius_over_z
     circle = circ(
         torch.sqrt(torch.square(Fx) + torch.square(Fy)) * scale_factor, radius=1
     )

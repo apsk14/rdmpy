@@ -4,6 +4,7 @@ import pathlib
 import os
 
 import torch
+import numpy as np
 
 from ._src import opt, util
 from .calibrate import get_psfs
@@ -438,11 +439,14 @@ def blind(
 
     def_sys_params = {
         "samples": min(image.shape),
-        "L": 1e-3,
+        "L": 0,
         "lamb": 0.55e-6,
-        "pupil_radius": ((min(image.shape)) * (0.55e-6) * (100e-3)) / (4 * (1e-3)),
-        "z": 100e-3,
+        "NA": 0.5,
     }
+    radius_over_z = np.tan(np.arcsin(def_sys_params["NA"]))
+    def_sys_params["L"] = ((min(image.shape)) * (def_sys_params["lamb"])) / (
+        4 * (radius_over_z)
+    )
     def_sys_params.update(sys_params)
 
     if process:
