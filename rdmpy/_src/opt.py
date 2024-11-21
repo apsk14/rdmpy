@@ -683,6 +683,111 @@ def center_crop(measurement, des_shape):
     return measurement
 
 
+def fit_gaussian(
+    calib_image,
+    sys_params,
+    fit_params,
+    show_psfs=False,
+    verbose=True,
+    device=torch.device("cpu"),
+):
+    """
+    Estimate the Seidel coefficients of the optical system given a calibration image of
+    randomly scattered PSFs and their locations.
+
+
+    Parameters
+    ----------
+    calib_image : np.ndarray
+        Calibration image of randomly scattered PSFs.
+
+    sys_params : dict
+        Dictionary of optical system parameters.
+
+    fit_params : dict
+        Dictionary of fitting parameters.
+
+    show_psfs : bool, optional
+        Whether to show the estimated PSFs. The default is False.
+
+    verbose : bool, optional
+        Whether to print out progress. The default is True.
+
+    device : torch.device, optional
+        Device to run the calibration on. The default is torch.device("cpu").
+
+    Returns
+    -------
+    var : torch.Tensor
+        Estimated variance of the Gaussian PSF.
+
+    final_psf : np.ndarray
+        Estimated PSF.
+
+    """
+
+    psfs_gt = torch.tensor(calib_image, device=device).float()
+
+    var = torch.tensor([1e-2], device=device)
+    var.requires_grad = True
+
+    optimizer = torch.optim.Adam([var], lr=fit_params["lr"])
+    l2_loss_fn = torch.nn.MSELoss()
+    l1_loss_fn = torch.nn.L1Loss()
+
+    if fit_params["plot_loss"]:
+        losses = []
+
+    iterations = (
+        tqdm(range(fit_params["iters"])) if verbose else range(fit_params["iters"])
+    )
+
+    for iter in iterations:
+        var_2 = var * torch.ones([2, 1], device=device)
+        psf_estimate = seidel.make_gaussian(
+            var_2, psfs_gt.shape[0], sys_params["L"], device=device
+        )
+        loss = l2_loss_fn(
+            ((psf_estimate / psf_estimate.max()).float()),
+            (psfs_gt / psfs_gt.max()).float(),
+        ) + fit_params["reg"] * l2_loss_fn(var, -var)
+
+        if fit_params["plot_loss"]:
+            losses += [loss.detach().cpu()]
+
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    final_psf = psf_estimate.detach().cpu().numpy()
+
+    if show_psfs:
+
+        plt.subplot(1, 2, 2)
+        plt.tight_layout()
+        plt.axis("off")
+        plt.imshow(final_psf, cmap="inferno")
+        plt.gca().set_title("Seidel PSFs")
+
+        plt.subplot(1, 2, 1)
+        plt.tight_layout()
+        plt.axis("off")
+        plt.imshow(psfs_gt.detach().cpu().numpy(), cmap="inferno")
+        plt.gca().set_title("Measured PSFs")
+        plt.show()
+
+    if fit_params["plot_loss"]:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
+
+    del psf_estimate
+    del psfs_gt
+
+    return var, final_psf
+
+
 def wiener(image, psf, balance=5e-4, reg=None, is_real=True, clip=True):
     """
     Applies a wiener filter to an image using the psf.

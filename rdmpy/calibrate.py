@@ -36,9 +36,9 @@ def calibrate(
         Desired sidelength of each PSF image. Note that it enforces square images.
 
     model : str, optional
-        Either 'lsi' or 'lri' for the type of PSF model to use.
-        'lsi' returns a single PSF at the center of the image, while 'lri' returns a
-        radial line of PSF RoFTs. Use 'lri' for ring deconvolution, and 'lsi' for
+        Either 'lsi', 'lri', or 'gaussian' for the type of PSF model to use.
+        'lsi'/'gaussian' returns a single PSF at the center of the image, while 'lri' returns a
+        radial line of PSF RoFTs. Use 'lri' for ring deconvolution, and 'lsi' or 'gaussian' for
         standard deconvolution.
 
     get_psf_data : bool, optional
@@ -113,6 +113,33 @@ def calibrate(
     # seperating out individual PSFs from the calibration image
     psf_locations, calib_image = util.get_calib_info(calib_image, dim, def_fit_params)
 
+    if model == "gaussian":
+        # get psf location closest to the center
+        center = (dim // 2, dim // 2)
+        center_psf = calib_image.copy()
+        # set to zero everything outside a center crop of size buffer
+        buffer = 10
+        center_psf[0 : center[0] - buffer, :] = 0
+        center_psf[center[0] + buffer :, :] = 0
+        center_psf[:, 0 : center[1] - buffer] = 0
+        center_psf[:, center[1] + buffer :] = 0
+        center_psf = center_psf / np.sum(center_psf)
+        # fit the gaussian PSF
+        var, center_psf = opt.fit_gaussian(
+            center_psf,
+            def_sys_params,
+            def_fit_params,
+            show_psfs=True,
+            verbose=True,
+            device=device,
+        )
+        if downsample < 1:
+            center_psf = seidel.make_gaussian(
+                [var, var], int(dim // downsample), def_sys_params["L"], device=device
+            )
+
+        return center_psf / center_psf.sum()
+
     # seidel fitting
     if verbose:
         print("fitting seidel coefficients...")
@@ -148,7 +175,7 @@ def calibrate(
         if get_inter_seidels:
             seidel_coeffs = coeffs
 
-    return seidel_coeffs
+    return seidel_coeffs.abs()
 
 
 def get_psfs(
@@ -159,6 +186,7 @@ def get_psfs(
     downsample=1,
     psf_data=None,
     verbose=True,
+    higher_order=None,
     device=torch.device("cpu"),
 ):
     """
@@ -236,6 +264,7 @@ def get_psfs(
             stack=True,
             buffer=buffer,
             downsample=downsample,
+            higher_order=higher_order,
             verbose=verbose,
             device=device,
         )

@@ -11,6 +11,7 @@ from torch.nn.functional import interpolate
 
 import matplotlib as mpl
 from tqdm import tqdm
+from torchvision.transforms.functional import gaussian_blur
 
 from . import util, polar_transform
 
@@ -19,7 +20,7 @@ mpl.rcParams["figure.dpi"] = 500
 
 
 # Note coeffs expected in following order: Wd, W040, W131, W222, W220, W311
-def compute_pupil_phase(coeffs, X, Y, u, v):
+def compute_pupil_phase(coeffs, X, Y, u, v, higher_order=None):
     """
     Computes the Seidel polynomial given a grid and coefficients
 
@@ -39,6 +40,10 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
 
     v : torch.Tensor
         Y coordinate of the point in the object plane.
+
+    higher_order : torch.Tensor, optional
+       6th order coefficients of the optical system.
+
 
     Returns
     -------
@@ -63,6 +68,19 @@ def compute_pupil_phase(coeffs, X, Y, u, v):
         + coeffs[5] * pupil_radii
     )
 
+    if higher_order is not None:
+        higher_order_pupil = (
+            higher_order[0] * pupil_radii**3
+            + higher_order[1] * obj_rad * pupil_radii**2 * X_rot
+            + higher_order[2] * obj_rad**2 * pupil_radii * X_rot**2
+            + higher_order[3] * obj_rad**2 * pupil_radii**2
+            + higher_order[4] * obj_rad**3 * pupil_radii * X_rot
+            + higher_order[5] * obj_rad**4 * X_rot**2
+            + higher_order[6] * obj_rad**4 * pupil_radii
+            + higher_order[7] * obj_rad**5 * X_rot
+        )
+        pupil_phase += higher_order_pupil
+
     return pupil_phase
 
 
@@ -75,6 +93,7 @@ def compute_psfs(
     stack=False,
     buffer=2,
     downsample=1,
+    higher_order=None,
     verbose=False,
     device=torch.device("cpu"),
 ):
@@ -96,15 +115,20 @@ def compute_psfs(
     polar : bool, optional
         Whether to return PSFs in polar coordinates.
 
-    buffer : int, optional
-        How many extra rows to add to each PSF for RoFT.
-
     stack : bool, optional
         Whether to stack PSFs into a single tensor.
 
+    buffer : int, optional
+        How many extra rows to add to each PSF for RoFT.
+
+    downsample : int, optional
+        Factor by which to downsample the PSFs.
+
+    higher_order : torch.Tensor, optional
+        6th order coefficients of the optical system.
+
     verbose : bool, optional
         Whether to display a progress bar.
-
 
     device : torch.device, optional
         Which device to run on.
@@ -146,8 +170,8 @@ def compute_psfs(
     lamb = sys_params["lamb"]
     radius_over_z = np.tan(np.arcsin(sys_params["NA"]))
     k = (2 * np.pi) / lamb
-    fx = np.linspace(-1 / (2 * dt), 1 / (2 * dt), samples)
-    [Fx, Fy] = torch.tensor(np.meshgrid(fx, fx), device=device)
+    fx = torch.linspace(-1 / (2 * dt), 1 / (2 * dt), samples, device=device)
+    [Fx, Fy] = torch.meshgrid((fx, fx), indexing="xy")
     scale_factor = lamb / radius_over_z
     circle = circ(
         torch.sqrt(torch.square(Fx) + torch.square(Fy)) * scale_factor, radius=1
@@ -184,6 +208,8 @@ def compute_psfs(
     else:
         desired_psfs = []
     idx = 0
+    if higher_order is not None:
+        higher_order = lamb * higher_order
     for point in iterable_coords:
         W = compute_pupil_phase(
             lamb * coeffs,
@@ -191,6 +217,7 @@ def compute_psfs(
             Y=-Fy * scale_factor,
             u=(point[0]) / (samples / 2),
             v=-(point[1]) / (samples / 2),
+            higher_order=higher_order,
         )
         H = circle * torch.exp(-1j * k * W)
         H[circle < 1e-12] = 0
@@ -198,7 +225,7 @@ def compute_psfs(
         del H
         curr_psf = torch.square(torch.abs(curr_psf))
         # apply a gaussian blur to the psf
-        # curr_psf = gaussian_blur(curr_psf[None, :, :], kernel_size=3, sigma=3).squeeze()
+        # curr_psf = gaussian_blur(curr_psf[None, :, :], kernel_size=5, sigma=5).squeeze()
         # pdb.set_trace()
         curr_psf = util.shift_torch(
             curr_psf,
@@ -232,6 +259,38 @@ def compute_psfs(
         idx += 1
 
     return desired_psfs
+
+
+def make_gaussian(var, dim, L, device):
+    """
+    Returns a 2D Gaussian with variance `var` and sidelength `dim`.
+
+    Parameters
+    ----------
+    var : float
+        Variance of the desired Gaussian mask.
+
+    dim : int
+        Sidelength of the desired Gaussian mask.
+
+    device : torch.device
+        Device to run on.
+
+    Returns
+    -------
+    mask : torch.Tensor
+        2D Gaussian with variance `var` and sidelength `dim`.
+
+    """
+    x = torch.linspace(-L / 2, L / 2, dim + 1, device=device)[1:] * 1e6
+    X, Y = torch.meshgrid(x, x)
+    kernel = torch.exp(-((X**2) / (2 * var[0]) + (Y**2) / (2 * var[1])))
+
+    # pdb.set_trace()
+
+    kernel = kernel / torch.sum(kernel)
+
+    return kernel
 
 
 def circ(r, radius):
