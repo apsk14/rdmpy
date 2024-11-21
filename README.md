@@ -3,6 +3,10 @@
 [![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
 
 ## UPDATES:
+* [November 2024] MAJOR UPDATE!
+  * Added Sheet convolution/deconvolution for deblurring images from light-sheet microscopes. Check out experiments/light-sheet.ipynb.
+  * Added higher-order Seidel coefficients for systems that have higher-order aberrations.
+  * Note, these updates require upgrading pytorch to 2.4.1.
 * [March 11th 2024] New Demos with experimental data
   * Check out demo.ipynb and mmf.ipynb for easy-to-run examples of rdmpy
   * If you have some bigger GPUs, try out the miniscope.ipynb or multicolor.ipynb
