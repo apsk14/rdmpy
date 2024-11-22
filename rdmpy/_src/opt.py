@@ -178,6 +178,396 @@ def estimate_coeffs(
     return final_coeffs
 
 
+def fit_beam(
+    psf_stack,
+    psf_locs,
+    psf_dim,
+    coeffs,
+    NA,
+    wavelength,
+    dz=None,
+    iters=100,
+    lr=5e-2,
+    verbose=True,
+    device=torch.device("cpu"),
+    grid_search=False,
+):
+
+    torch.autograd.set_detect_anomaly(True)
+    psfs_gt = torch.tensor(psf_stack, device=device).float()
+    # if coeffs is None:
+    coeffs = torch.zeros((6, 1), device=device)
+
+    radius_over_z = torch.tan(torch.arcsin(torch.tensor(NA)))
+    dim = psf_stack.shape[0]
+    L = ((dim) * (wavelength)) / (4 * (radius_over_z))
+    # dx = L / dim
+
+    # if dz is None:
+    #     dz = dx * 2
+
+    l2_loss_fn = torch.nn.MSELoss()
+
+    l1_loss_fn = torch.nn.L1Loss()
+
+    best_waist = 0.0005
+    best_spread = 0.0075
+    best_defocus_rate = 0.2
+
+    waist = torch.tensor([best_waist], device=device)
+    spread = torch.tensor([best_spread], device=device)
+    defocus_rate = torch.tensor([best_defocus_rate], device=device)
+    coeff = torch.tensor([0.68], device=device)
+    dx = torch.tensor([0.04], device=device)
+    dz = torch.tensor([0.15], device=device)
+    gl_params = {
+        "M": torch.tensor(100.0, device=device),  # magnification
+        "NA": torch.tensor(1.2, device=device),  # numerical aperture
+        "ng0": torch.tensor(1.5, device=device),  # coverslip RI design value
+        "ng": torch.tensor(1.5, device=device),  # coverslip RI experimental value
+        "ni0": torch.tensor(1.5, device=device),  # immersion medium RI design value
+        "ni": torch.tensor(
+            1.5, device=device
+        ),  # immersion medium RI experimental value
+        # "ns": torch.tensor(1.33, device=device),  # specimen refractive index (RI)
+        "ti0": torch.tensor(
+            150.0, device=device
+        ),  # microns, working distance (immersion medium thickness) design value
+        "tg": torch.tensor(
+            170.0, device=device
+        ),  # microns, coverslip thickness experimental value
+        "tg0": torch.tensor(
+            170.0, device=device
+        ),  # microns, coverslip thickness design value
+        "zd0": torch.tensor(200.0 * 1.0e3, device=device),
+        "depth": torch.tensor(-0.5, device=device),
+    }
+
+    if ((6 * waist) / (dz * 1e-3)) < 1:
+        waist.data = (dz * 1e-3) / 6
+
+    waist.requires_grad = True
+    spread.requires_grad = True
+    defocus_rate.requires_grad = True
+    coeff.requires_grad = True
+
+    for value in gl_params.values():
+        value.requires_grad = True
+
+    dx.requires_grad = True
+    dz.requires_grad = True
+
+    optimizer = torch.optim.Adam(
+        [waist, spread, dx, dz] + list(gl_params.values()), lr=lr
+    )
+    # optimizer = torch.optim.SGD([waist, spread, defocus_rate], lr=lr)
+    # optimizer = torch.optim.Adam([waist, spread, defocus_rate], lr=lr)
+
+    iterations = tqdm(range(iters)) if verbose else range(iters)
+    for iter in iterations:
+        # produce candidate PSFs
+        loss = 0
+
+        for loc in psf_locs:
+            norm_x = (loc[0] - psfs_gt.shape[0] // 2) / (psfs_gt.shape[0] // 2)
+            x = (loc[0] - psfs_gt.shape[0] // 2) * (L / dim)
+            # candidate_psf = torch.sqrt(waist)
+
+            candidate_psf = seidel.get_ls_psfs(
+                torch.tensor(
+                    [coeff, coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5]],
+                    device=device,
+                ),
+                waist,
+                spread,
+                defocus_rate,
+                x=x,
+                norm_x=norm_x,
+                dx=dx,
+                dz=dz,
+                dim=psf_dim,
+                zmax=48,
+                wavelength=wavelength,
+                NA=NA,
+                gl_params=gl_params,
+                device=device,
+            )
+            # compare candidate with gt psf by cropping out the appropriate section of the gt psf, ensuring edges are handled correctly
+            buffer = 4
+            # concentare buffer zeros in every dimensions
+            candidate_psf = torch.nn.functional.pad(
+                candidate_psf,
+                (buffer, buffer),
+                mode="constant",
+                value=0,
+            )
+
+            psf_dim_z = candidate_psf.shape[2]
+            if loc[0] < psf_dim // 2:
+                left_crop = psf_dim // 2 - loc[0]
+                candidate_psf = candidate_psf[left_crop:, :, :]
+            if loc[0] > psfs_gt.shape[0] - psf_dim // 2:
+                right_crop = loc[0] - psfs_gt.shape[0] + psf_dim // 2
+                candidate_psf = candidate_psf[:-right_crop, :, :]
+            if loc[1] < psf_dim // 2:
+                left_crop = psf_dim // 2 - loc[1]
+                candidate_psf = candidate_psf[:, left_crop:, :]
+            if loc[1] > psfs_gt.shape[1] - psf_dim // 2:
+                right_crop = loc[1] - psfs_gt.shape[1] + psf_dim // 2
+                candidate_psf = candidate_psf[:, :-right_crop, :]
+
+            if loc[2] < psf_dim_z // 2:
+                left_crop = psf_dim_z // 2 - loc[2]
+                candidate_psf = candidate_psf[:, :, left_crop:]
+            if loc[2] > psfs_gt.shape[2] - psf_dim_z / 2:
+                right_crop = (
+                    loc[2] - psfs_gt.shape[2] + psf_dim_z // 2 + int(psf_dim_z % 2)
+                )
+                candidate_psf = candidate_psf[:, :, :-right_crop]
+
+            comparison_psf = psfs_gt[
+                (loc[0] - psf_dim // 2)
+                * int(loc[0] >= psf_dim // 2) : (
+                    (loc[0] + psf_dim // 2)
+                    if loc[0] <= psfs_gt.shape[0] - psf_dim // 2
+                    else None
+                ),
+                (loc[1] - psf_dim // 2)
+                * int(loc[1] >= psf_dim // 2) : (
+                    (loc[1] + psf_dim // 2)
+                    if loc[1] <= psfs_gt.shape[1] - psf_dim // 2
+                    else None
+                ),
+                (loc[2] - psf_dim_z // 2)
+                * int(loc[2] >= psf_dim_z // 2) : (
+                    (loc[2] + psf_dim_z // 2 + int(psf_dim_z % 2))
+                    if loc[2] < psfs_gt.shape[2] - psf_dim_z // 2
+                    else None
+                ),
+            ]
+            loss += l2_loss_fn(candidate_psf, comparison_psf)
+
+        # pdb.set_trace()
+        # print(loss.item())
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # # project onto [0,1]
+        # na.data = torch.clamp(na.data, 0.05, 2.0)
+        # ns.data = torch.clamp(ns.data, 0.05, 2.0)
+        # ti0.data = torch.clamp(ti0.data, 0.0, 1000.0)
+        # zd0.data = torch.clamp(zd0.data, 0.0, 1.0e9)
+
+        if ((6 * waist.data) / (dz * 1e-3)) < 1:
+            waist.data = (dz * 1e-3) / 6
+
+    print("waist: ", waist.item())
+    print("spread: ", spread.item())
+    print("defocus_rate: ", defocus_rate.item())
+    print("coeff: ", coeff.item())
+    for key, value in gl_params.items():
+        print(key, ": ", value.item())
+        gl_params[key] = value.detach()
+    print("dx: ", dx.item())
+    print("dz: ", dz.item())
+    # print("sphere: ", sphere.item())
+    coeffs[0] = coeff
+
+    return (
+        waist.detach(),
+        spread.detach(),
+        defocus_rate.detach(),
+        coeffs.detach(),
+        gl_params,
+        dx.detach(),
+        dz.detach(),
+    )
+
+
+def volume_recon(
+    measurement,
+    psf_stack,
+    opt_params,
+    warm_start=None,
+    verbose=True,
+    device=torch.device("cpu"),
+):
+    """
+    Deblurs an image using either deconvolution or ring deconvolution
+
+    Parameters
+    ----------
+    measurement : torch.Tensor
+        Measurement to be deblurred. Should be (N,N).
+
+    psf_data : torch.Tensor
+        Stack of rotationatal Fourier transforms of the PSFs if model is 'lri',
+        otherwise single center PSF if model is 'lsi'.
+
+    model : str
+        Either 'lri' or 'lsi'.
+
+    opt_params : dict
+        Dictionary of optimization parameters.
+
+    warm_start : torch.Tensor, optional
+        Warm start for the optimization. The default is None.
+
+    use_batch_conv : bool, optional
+        Whether to use batched lri convolution. The default is False.
+
+    verbose : bool, optional
+        Whether to print out progress. The default is True.
+
+    device : torch.device, optional
+        Device to run the reconstruction on. The default is torch.device("cpu").
+
+    Returns
+    -------
+    estimate : torch.Tensor
+        Deblurred image. Will be (N,N).
+
+    """
+    dim = measurement.shape
+
+    if warm_start is not None:
+        estimate = warm_start.clone()
+    else:
+        if opt_params["init"] == "measurement":
+            estimate = measurement.clone()
+        elif opt_params["init"] == "zero":
+            estimate = torch.zeros(dim, device=device)
+        elif opt_params["init"] == "noise":
+            estimate = torch.randn(dim, device=device)
+        else:
+            raise NotImplementedError
+
+    estimate.requires_grad = True
+
+    if opt_params["optimizer"] == "adam":
+        optimizer = torch.optim.Adam([estimate], lr=opt_params["lr"])
+    elif opt_params["optimizer"] == "sgd":
+        optimizer = torch.optim.SGD([estimate], lr=opt_params["lr"])
+    else:
+        raise NotImplementedError
+
+    # make a circle of radius dim//2
+    # x = torch.linspace(-1, 1, dim[0], device=device)
+    # y = torch.linspace(-1, 1, dim[1], device=device)
+    # X, Y = torch.meshgrid(x, y)
+    # support = (X**2 + Y**2) < 1
+    # # replicate along z dimension to make a volume
+    # support = support[..., None].repeat(1, 1, dim[2])
+    center_psf = psf_stack[-1]
+    dim = estimate.shape
+    diff_2 = (dim[2] - center_psf.shape[2]) // 2
+    diff_1 = (dim[1] - center_psf.shape[1]) // 2
+    diff_0 = (dim[0] - center_psf.shape[0]) // 2
+    # take psf and pad it with zeros on either side till it has the same last dimension as the object
+    center_psf = torch.nn.functional.pad(
+        center_psf,
+        (diff_2 + 1, diff_2, diff_1, diff_1, diff_0, diff_0),
+        mode="constant",
+        value=0,
+    )
+    # otf = (fft.fftn(center_psf)).abs()
+    measurement_fft = fft.fftshift(fft.fftn(measurement))
+    # quant = torch_quantile(otf, 0.1)
+
+    loss_fn = torch.nn.MSELoss()
+    # loss_fn = torch.nn.L1Loss()
+
+    losses = []
+
+    if opt_params["plot_loss"]:
+        losses = []
+
+    iterations = (
+        tqdm(range(opt_params["iters"])) if verbose else range(opt_params["iters"])
+    )
+
+    for it in iterations:
+
+        measurement_guess = blur.sheet_convolve(estimate, psf_stack, device=device)
+
+        loss_main = loss_fn(measurement_guess, measurement)
+        loss = (
+            loss_main
+            + tv(estimate, opt_params["tv_reg"])
+            + opt_params["l2_reg"] * torch.norm(estimate)
+            + opt_params["l1_reg"] * torch.sum(torch.abs(estimate))
+        )
+
+        # print(loss_main.item())
+
+        if opt_params["plot_loss"]:
+            losses += [loss.detach().cpu()]
+
+        loss.backward()
+        # grad = estimate.grad
+        # smooth grad
+        # estimate.grad = F.conv3d(
+        #     grad[None, None, ...],
+        #     torch.tensor([1, 1, 1], device=device).float()[None, None, None, None, :],
+        #     padding=(0, 0, 1),
+        # ).squeeze()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        with torch.no_grad():
+            # fourier filter in 3D
+            # 3D fourier transform of shifted so DC is in the center
+            # estimate_fft = fft.fftshift(fft.fftn(estimate.data))
+            # center = [
+            #     estimate.shape[0] // 2,
+            #     estimate.shape[1] // 2,
+            #     estimate.shape[2] // 2,
+            # ]
+            # pad = 4
+            # estimate_fft[
+            #     center[0] - pad : center[0] + pad,
+            #     center[1] - pad : center[1] + pad,
+            #     center[2] - pad : center[2] + pad,
+            # ] = (
+            #     0.7
+            #     * measurement_fft[
+            #         center[0] - pad : center[0] + pad,
+            #         center[1] - pad : center[1] + pad,
+            #         center[2] - pad : center[2] + pad,
+            #     ]
+            #     + 0.3
+            #     * estimate_fft[
+            #         center[0] - pad : center[0] + pad,
+            #         center[1] - pad : center[1] + pad,
+            #         center[2] - pad : center[2] + pad,
+            #     ]
+            # )
+            # # estimate_fft[otf < quant] = 0
+            # estimate.data = (fft.ifftn(fft.ifftshift(estimate_fft))).real
+            # estimate = fft.ifftn(fourier_filter * estimate_fft).real
+            # apply filter
+
+            # project onto [0,1]
+            estimate.data[estimate.data < 0] = 0
+            # upper proejction
+            if opt_params["upper_projection"]:
+                estimate.data[estimate.data > 1] = 1
+
+    if opt_params["plot_loss"]:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
+
+    final = util.normalize(estimate.detach().cpu().float().numpy().copy())
+
+    del estimate
+    gc.collect()
+
+    return final
+
+
 def image_recon(
     measurement,
     psf_data,

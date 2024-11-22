@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.fft as fft
 import matplotlib as mpl
+from tqdm import tqdm
+from skimage.feature import corner_peaks
 
 from ._src import opt, seidel, util
 import gc
@@ -178,6 +180,161 @@ def calibrate(
     return seidel_coeffs.abs()
 
 
+def calibrate_sdm(
+    psf_stack,
+    psf_dim,
+    model="gl",
+    iters=100,
+    NA=0.2,
+    wavelength=550e-6,
+    device=torch.device("cpu"),
+):
+
+    psf_stack[psf_stack < np.quantile(psf_stack, 0.9)] = 0
+
+    psf_locs = get_psf_centers(psf_stack, min_distance=20)
+    # order psf_locs by 0th index
+    psf_locs = psf_locs[psf_locs[:, 0].argsort()]
+    # get psf_locs cloest to the center
+    center = torch.tensor(
+        [psf_stack.shape[0] // 2, psf_stack.shape[1] // 2, psf_stack.shape[2] // 2],
+        device=device,
+    )
+    psf_locs = torch.tensor(psf_locs, device=device)
+    min_idx = torch.argmin(torch.norm(psf_locs.float() - center.float(), dim=1))
+
+    print("min_idx:", min_idx)
+    psf_center = psf_locs[min_idx].unsqueeze(0)[0]
+
+    # crop psf_stack centered on psf_center of size psf_dim, psf_dim, z_max
+    center_psf = psf_stack[
+        psf_center[0] - psf_dim // 2 : psf_center[0] + psf_dim // 2,
+        psf_center[1] - psf_dim // 2 : psf_center[1] + psf_dim // 2,
+        psf_center[2] - psf_dim // 2 : psf_center[2] + psf_dim // 2,
+    ]
+
+    if model == "deconvolution":
+        return center_psf
+
+    if model == "interpolation":
+        psf_stack = torch.tensor(psf_stack, device=device).float()
+        psf_cube = []
+        # loop from center to top and set psf to an interpolation of the two nearest psfs
+        for i in range(psf_stack.shape[0]):
+            curr_y = i + psf_stack.shape[0] // 2
+            closest_index = torch.argmin(torch.abs(psf_locs[:, 0] - curr_y))
+            if psf_locs[closest_index][0] < curr_y:
+                weight_1 = torch.abs(curr_y - psf_locs[closest_index][0])
+                weight_2 = torch.abs(curr_y - psf_locs[closest_index - 1][0])
+                weight_1 = weight_1 / (weight_1 + weight_2)
+                weight_2 = weight_2 / (weight_1 + weight_2)
+                curr_psf = weight_2 * isolate_psf(
+                    psf_stack, psf_locs[closest_index], psf_dim
+                ) + weight_1 * isolate_psf(
+                    psf_stack, psf_locs[closest_index - 1], psf_dim
+                )
+                curr_psf[curr_psf < torch.quantile(curr_psf, 0.9)] = 0
+
+            elif (
+                psf_locs[closest_index][0] > curr_y
+                and closest_index < len(psf_locs) - 1
+            ):
+                weight_1 = torch.abs(curr_y - psf_locs[closest_index][0])
+                weight_2 = torch.abs(curr_y - psf_locs[closest_index + 1][0])
+                weight_1 = weight_1 / (weight_1 + weight_2)
+                weight_2 = weight_2 / (weight_1 + weight_2)
+                curr_psf = weight_2 * isolate_psf(
+                    psf_stack, psf_locs[closest_index], psf_dim
+                ) + weight_1 * isolate_psf(
+                    psf_stack, psf_locs[closest_index + 1], psf_dim
+                )
+                curr_psf[curr_psf < torch.quantile(curr_psf, 0.9)] = 0
+            else:
+                curr_psf = isolate_psf(psf_stack, psf_locs[closest_index], psf_dim)
+                curr_psf[curr_psf < torch.quantile(curr_psf, 0.9)] = 0
+
+            psf_cube += [curr_psf]
+
+        return psf_cube, psf_locs
+
+    waist, spread, defocus_rate, coeffs, gl_params, dx, dz = opt.fit_beam(
+        psf_stack,
+        psf_locs,
+        psf_dim,
+        coeffs=None,
+        NA=NA,
+        wavelength=wavelength,
+        dz=None,
+        iters=iters,
+        lr=2e-4,
+        verbose=True,
+        device=device,
+        grid_search=False,
+    )
+
+    return coeffs, waist, spread, defocus_rate, psf_locs, gl_params, dx, dz
+
+
+def get_ls_psfs(
+    coeffs,
+    waist,
+    spread,
+    defocus_rate,
+    dx,
+    dz,
+    dim,
+    zmax,
+    num_psfs,
+    wavelength=550e-6,
+    NA=0.2,
+    get_center_vals=False,
+    gl_params=None,
+    device=torch.device("cpu"),
+):
+    # check if coeffs is tensor, if not make it one
+    if not torch.is_tensor(coeffs):
+        coeffs = torch.tensor(coeffs, device=device)
+
+    # get params for the imaging system
+    radius_over_z = torch.tan(
+        torch.arcsin(torch.tensor(NA))
+    )  # radius length in the fourier domain
+    L = ((dim) * (wavelength)) / (4 * (radius_over_z))
+    # dx = L / dim
+    # dz = dx * 2
+
+    psf_cube_list = []
+    if get_center_vals:
+        psf_centers_values = []
+
+    for i in tqdm(range(num_psfs)):
+        norm_x = i / num_psfs
+        x = i * (L / dim)
+        curr_psf = seidel.get_ls_psfs(
+            coeffs,
+            waist,
+            spread,
+            torch.tensor([defocus_rate], device=device),
+            x,
+            norm_x,
+            dx,
+            dz,
+            dim,
+            zmax,
+            wavelength,
+            NA,
+            gl_params,
+            device,
+        )
+        psf_cube_list += [curr_psf]
+        if get_center_vals:
+            psf_centers_values += [torch.sum(curr_psf * curr_psf)]
+    if get_center_vals:
+        return psf_cube_list, torch.tensor(psf_centers_values, device=device)
+
+    return psf_cube_list
+
+
 def get_psfs(
     seidel_coeffs,
     dim,
@@ -283,3 +440,21 @@ def get_psfs(
         gc.collect()
 
     return psf_data
+
+
+def isolate_psf(psf_stack, psf_loc, psf_dim):
+    return psf_stack[
+        psf_loc[0] - psf_dim // 2 : psf_loc[0] + psf_dim // 2,
+        psf_loc[1] - psf_dim // 2 : psf_loc[1] + psf_dim // 2,
+        psf_loc[2] - psf_dim // 2 : psf_loc[2] + psf_dim // 2,
+    ]
+
+
+def get_psf_centers(psf_stack, min_distance=2, threshold=0.1):
+    psf_locs = corner_peaks(
+        psf_stack,
+        min_distance=min_distance,
+        indices=True,
+        threshold_rel=threshold,
+    )
+    return psf_locs

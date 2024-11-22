@@ -3,11 +3,74 @@
 import numpy as np
 import torch
 import torch.fft as fft
-from torch.nn.functional import pad
+import torch.nn.functional as F
 
 from tqdm import tqdm
 
 from ._src import polar_transform, seidel, util
+
+
+def sheet_convolve(img_stack, psf_stack, device=torch.device("cpu")):
+    """
+
+    Returns the slab convolution of an image stack with a stack of PSFs.
+
+    Parameters
+    ----------
+    img_stack : torch.Tensor
+        The image stack to be convolved with the PSF stack. Must be (M,N,T).
+
+    psf_stack : torch.Tensor
+        The stack of PSFs to convolve the image with. Must be a list of 3D PSFs.
+
+    device : torch.device, optional
+        The device to use for the computation.
+
+    Returns
+    -------
+    img : torch.Tensor
+        The slab convolution of the image stack with the PSF stack. Will be (N,N,T).
+
+    """
+
+    result_tensor = torch.zeros_like(img_stack).to(device)
+    for i in range(img_stack.shape[0]):
+        curr_img_slice = img_stack[i, :, :].T
+        curr_img_slice = curr_img_slice[None, None, :, :]
+        if i < img_stack.shape[0] // 2:
+            curr_psf = psf_stack[img_stack.shape[0] // 2 - i - 1]
+        else:
+            curr_psf = psf_stack[i - img_stack.shape[0] // 2]
+
+        output_chunk = F.conv2d(
+            curr_img_slice,
+            torch.flip(curr_psf[None, :].permute(1, 0, 3, 2), [2, 3]),
+            padding=(curr_psf.shape[2] // 2, curr_psf.shape[1] // 2),
+        ).squeeze()
+
+        if output_chunk.shape[1] != curr_img_slice.shape[2]:
+            output_chunk = output_chunk[:, 1:, :]
+        if output_chunk.shape[2] != curr_img_slice.shape[3]:
+            output_chunk = output_chunk[:, :, 1:]
+        if (
+            i >= output_chunk.shape[0] // 2
+            and i <= img_stack.shape[0] - output_chunk.shape[0] // 2
+        ):
+            result_tensor[
+                i - output_chunk.shape[0] // 2 : i + output_chunk.shape[0] // 2, :, :
+            ] += output_chunk.permute(0, 2, 1)
+        elif i < output_chunk.shape[0] // 2:
+            result_tensor[
+                0 : i + output_chunk.shape[0] // 2, :, :
+            ] += output_chunk.permute(0, 2, 1)[output_chunk.shape[0] // 2 - i :, :, :]
+        else:
+            result_tensor[
+                i - output_chunk.shape[0] // 2 :, :, :
+            ] += output_chunk.permute(0, 2, 1)[
+                0 : img_stack.shape[0] - (output_chunk.shape[0] // 2 + i), :, :
+            ]
+
+    return result_tensor
 
 
 def ring_convolve(
@@ -331,8 +394,8 @@ def convolve(obj, psf):
     """
 
     extent = obj.shape[0]
-    padded_obj = pad(obj, (0, extent, 0, extent))
-    padded_psf = pad(psf, (0, extent, 0, extent))
+    padded_obj = F.pad(obj, (0, extent, 0, extent))
+    padded_psf = F.pad(psf, (0, extent, 0, extent))
     padded_img = fft.irfftn(fft.rfftn(padded_obj) * fft.rfftn(padded_psf))
     padded_img = torch.roll(
         padded_img,

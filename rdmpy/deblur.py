@@ -14,6 +14,145 @@ from .dl_models.DeepRD.DeepRD import UNet as DeepRD
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
 
+def sheet_deconvolve(
+    image_stack,
+    psf_stack,
+    tv_reg=0,
+    l2_reg=0,
+    l1_reg=0,
+    iters=150,
+    lr=1e-3,
+    opt_params={},
+    method="autograd",
+    warm_start=None,
+    verbose=True,
+    center_vals=None,
+    device=torch.device("cpu"),
+):
+    """
+    Ring deconvolves an image with a stack of PSFs.
+
+    Parameters
+    ----------
+    image : np.ndarray or torch.Tensor
+        The image to be deconvolved. Must be (N,N), (C,N,N), or (B,C,N,N).
+
+    psf_roft : torch.Tensor
+        The stack of PSFs to deconvolve the image with. The PSFs should be in the
+        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
+        M is the number of angles, and is L is number of radii the in the RoFT.
+
+    tv_reg : float, optional
+        The Total Variation regularization parameter. Default is 1e-10.
+
+    l2_reg : float, optional
+        The L2 norm regularization parameter. Default is 1e-10.
+
+    l1_reg : float, optional
+        The L1 norm regularization parameter. Default is 0.
+
+    iters : int, optional
+        The number of iterations to run the optimization. Default is 150.
+
+    opt_params : dict, optional
+        Ad optimization/regularization parameters to use for deconvolution.
+        See `opt.py` for details.
+
+    use_batch_conv : bool, optional
+        Whether to use batched or unbatched lri convolution. The default is False.
+
+    process : bool, optional
+        Whether to process the image before deconvolution. Default is True.
+
+    hot_pixel : bool, optional
+        Whether to remove hot pixels from the image. Default is False.
+
+    verbose : bool, optional
+        Whether to display a progress bar.
+
+    device : torch.device, optional
+        The device to use for the computation.
+
+    Returns
+    -------
+    recon : torch.Tensor
+        The ring deconvolved image. Will be (N,N).
+
+    Notes
+    -----
+    An implementation of `Ring Deconvolution Microscopy:
+    An Exact Solution for Spatially-Varying Aberration Correction"
+    https://arxiv.org/abs/2206.08928
+
+    """
+
+    # default optimization parameters
+    def_opt_params = {
+        "iters": iters,  # number of iterations to run the optimization
+        "optimizer": "adam",  # which optimizer to use for the iterative optimization
+        "lr": lr,  # learning rate of the optimizer
+        "init": "measurement",  # initialization of the reconstruction before optimization
+        "crop": 0,  # How much to crop out when considering the optimization loss
+        "tv_reg": tv_reg,  # Total variation regularization parameter
+        "l2_reg": l2_reg,  # L2 norm regularization parameter
+        "l1_reg": l1_reg,  # L1 norm regularization parameter
+        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
+        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
+        "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
+    }
+    def_opt_params.update(opt_params)
+
+    # if process:
+    #     image_stack = (
+    #         util.process(image_stack, dim=image_stack.shape[-2:], hot_pix=hot_pixel)
+    #         * 0.9
+    #     )
+
+    # if not torch.is_tensor(image_stack):
+    #     image_stack = torch.tensor(image_stack)
+
+    if warm_start is not None:
+        warm_start = torch.tensor(warm_start)
+        if warm_start.device is not device:
+            warm_start = warm_start.to(device)
+
+    if method == "autograd":
+        recon = opt.volume_recon(
+            image_stack,
+            psf_stack,
+            opt_params=def_opt_params,
+            warm_start=warm_start,
+            device=device,
+            verbose=verbose,
+        )
+    elif method == "manual":
+        recon = opt.volume_recon_manual(
+            image_stack,
+            psf_stack,
+            opt_params=def_opt_params,
+            warm_start=warm_start,
+            device=device,
+            verbose=verbose,
+        )
+    elif method == "cg":
+        recon = opt.volume_recon_cg_normal(
+            image_stack,
+            psf_stack,
+            opt_params=def_opt_params,
+            warm_start=warm_start,
+            preconditioner="jacobi",
+            center_vals=center_vals,
+            device=device,
+            verbose=verbose,
+        )
+    elif method == "scipy":
+        recon = opt.volume_recon_scipy(
+            image_stack, psf_stack, opt_params, device=device
+        )
+
+    return recon
+
+
 def ring_deconvolve(
     image,
     psf_roft,
