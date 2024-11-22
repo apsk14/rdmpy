@@ -20,9 +20,9 @@
 
 
 ## Background
-Official implementations of Seidel fitting, ring convolution, and ring deconvolution. 
+Official implementations of Seidel fitting, ring convolution, ring deconvolution, sheet convolution, and sheet deconvolution. 
 
-Ring convolution allows one to compute the forward model of any rotationally symmetric imaging system. Simiarly, Ring deconvolution offers a fast and more accurate alternative to deconvolution (e.g., Wiener filter, Richardson-Lucy) by accounting for radially-varying blur. Both only require a single calibration image of a few randomly scattered PSFs. They are implemented with the two functions ```ring_convolve``` and ```ring_deconvolve```, respectively. 
+Ring convolution allows one to compute the forward model of any rotationally symmetric imaging system. Simiarly, Ring deconvolution offers a fast and more accurate alternative to deconvolution (e.g., Wiener filter, Richardson-Lucy) by accounting for radially-varying blur. Both only require a single calibration image of a few randomly scattered PSFs. They are implemented with the two functions ```ring_convolve``` and ```ring_deconvolve```, respectively. Sheet convolution/deconvolution is the same for systems with lateral symmetry, like light-sheet microscopes.
 
 This repository is still in early stages and will constantly be updated with new functionality and bug-fixes. In light of this **please run a ```git pull``` before every use.** It will soon be a PyPI package directly installable with pip.
 
@@ -59,11 +59,11 @@ After that, we are ready to run some rdmpy! You can immediately try out demo.ipy
 
 ## Useage
 
-Disclaimer: All jupyter notebooks can also just be viewed if the reader does not or cannot run them. 
+Disclaimer: All jupyter notebooks can also just be viewed if the reader cannot or does not want to run them. 
 
 For a walkthrough and instructions of the basic utility of this package please see ```demo.ipynb```. Depending on the notebook and computational resources available, this notebook should take no more than 10-15 minutes to run. On a linux server with a single Nvidia RTX A6000 GPU, it will completely run in a few minutes. 
 
-For more advanced useage, navigate to experiments/ and run ```bash get_data.sh experiment_name``` where experiment_name can be either mmf, miniscope, or multicolor. For example, ```bash get_data.sh mmf```. The open up the corresponding jupyter notebook and have fun! MMF is quite small and runs easily on any system. The other 2 require large gpus (>25GB Ram) to operate quickly at full scale. Moreover, they will require ~8GB of storage for the data. 
+For more advanced useage, navigate to experiments/ and run ```bash get_data.sh experiment_name``` where experiment_name can be either mmf, miniscope, multicolor, or light-sheet. For example, ```bash get_data.sh mmf```. The open up the corresponding jupyter notebook and have fun! MMF is quite small and runs easily on any system. The other 2 require large gpus (>25GB Ram) to operate quickly at full scale. Moreover, they will require ~8GB of storage for the data. 
 
 Comprehensive documentation for rdmpy can be found in ```calibrate.py```, ```blur.py```, and ```deblur.py```. Each function is fully documented within those files under the function headers. 
 
