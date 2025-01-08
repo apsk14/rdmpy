@@ -9,7 +9,7 @@ import numpy as np
 from ._src import opt, util
 from .calibrate import get_psfs
 from .dl_models.DeepRD.DeepRD import UNet as DeepRD
-
+from scipy.ndimage import median_filter
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
@@ -273,6 +273,7 @@ def deeprd(
     seidel_coeffs,
     sharpness=1.25,
     model_path=None,
+    noisy=False,
     process=True,
     hot_pixel=False,
     verbose=True,
@@ -342,16 +343,10 @@ def deeprd(
     if model_path is None:
         if image.shape[0] == 512:
             model_path = "dl_models/pretrained/deeprd_512"
-            if verbose:
-                print('Using pretrained model "deeprd_512"')
-
         elif image.shape[0] == 1024:
             model_path = "dl_models/pretrained/deeprd_1024"
-            if verbose:
-                print('Using pretrained model "deeprd_1024"')
-
         else:
-            raise NotImplementedError("DeepRD model not found for this image size")
+            raise ValueError("Image size not supported")
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ckpt_path = os.path.join(current_dir, model_path)
@@ -377,6 +372,9 @@ def deeprd(
     input = torch.stack((image.float() - 0.5, deconvolved.float() - 0.5))
     output = torch.clip(model(input, sharpness * seidel_coeffs.T) + 0.5, 0, 1)
     recon = util.tensor_to_np(output)
+
+    if noisy:
+        recon[recon < np.quantile(recon, noisy)] = 0
 
     return recon
 

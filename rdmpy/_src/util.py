@@ -519,7 +519,7 @@ def crop_pad(img, dim):
 
 
 def process(
-    img, dim, back=None, center=None, hot_pix=False, tolerance=1, remove_outer=True
+    img, dim, back=None, center=None, hot_pix=False, tolerance=0.5, remove_outer=True
 ):
     """
     Processes experimental data prior to reconstruction.
