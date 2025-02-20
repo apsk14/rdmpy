@@ -72,8 +72,11 @@ A full documentation webpage is coming soon!
 ## Acknowledgements
 
 We used code inspired by: 
+
 Computational Fourier Optics: A MATLAB Tutorial by David Voelz
+
 https://github.com/addisonElliott/polarTransform/tree/master
+
 https://github.com/MicroscPSF/MicroscPSF-Py?tab=readme-ov-file
 
 
