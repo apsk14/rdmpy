@@ -184,6 +184,7 @@ def calibrate_sdm(
     psf_stack,
     psf_dim,
     model="gl",
+    get_psfs=True,
     iters=100,
     NA=0.2,
     wavelength=550e-6,
@@ -217,6 +218,8 @@ def calibrate_sdm(
         return center_psf
 
     if model == "interpolation":
+        if not get_psfs:
+            return psf_locs
         psf_stack = torch.tensor(psf_stack, device=device).float()
         psf_cube = []
         # loop from center to top and set psf to an interpolation of the two nearest psfs
@@ -271,6 +274,26 @@ def calibrate_sdm(
         device=device,
         grid_search=False,
     )
+
+    if get_psfs:
+        psf_cube = get_ls_psfs(
+            coeffs,
+            waist,
+            spread,
+            defocus_rate,
+            dx,
+            dz,
+            psf_dim,
+            psf_stack.shape[2],
+            psf_stack.shape[0],
+            wavelength,
+            NA,
+            get_center_vals=False,
+            gl_params=gl_params,
+            device=device,
+        )
+
+        return psf_cube, psf_locs
 
     return coeffs, waist, spread, defocus_rate, psf_locs, gl_params, dx, dz
 
