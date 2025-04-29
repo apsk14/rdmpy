@@ -1,7 +1,6 @@
-from .calibrate import calibrate, get_psfs, calibrate_sdm, get_ls_psfs
+from .calibrate import calibrate_rdm, get_rdm_psfs, calibrate_sdm, get_ls_psfs
 from .blur import (
     ring_convolve,
-    ring_convolve_batch,
     convolve,
     full,
     sheet_convolve,

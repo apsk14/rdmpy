@@ -1,5 +1,3 @@
-"""Implementation of deblur models"""
-
 import pathlib
 import os
 
@@ -7,83 +5,215 @@ import torch
 import numpy as np
 
 from ._src import opt, util
-from .calibrate import get_psfs
+from .calibrate import get_rdm_psfs
 from .dl_models.DeepRD.DeepRD import UNet as DeepRD
-from scipy.ndimage import median_filter
 
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
 
-def sheet_deconvolve(
-    image_stack,
-    psf_stack,
-    tv_reg=0,
-    l2_reg=0,
-    l1_reg=0,
+def ring_deconvolve(
+    image,
+    psf_roft,
     iters=150,
-    lr=1e-3,
+    lr=5e-2,
+    tv_reg=1e-10,
+    l2_reg=1e-10,
+    l1_reg=0,
     opt_params={},
-    method="autograd",
     warm_start=None,
+    process=True,
+    hot_pixel=False,
     verbose=True,
-    center_vals=None,
     device=torch.device("cpu"),
 ):
-    """
-    Ring deconvolves an image with a stack of PSFs.
+    """Ring deconvolve an image.
+
+    This function deblurs a centered, square image from a rotationally symmetric imaging system. It uses a
+    stack of PSFs, one for each ring in the image. The PSFs should be in the rotational Fourier domain.
 
     Parameters
     ----------
     image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (N,N), (C,N,N), or (B,C,N,N).
+        The image to be deconvolved. Must be (N,N) and centered.
 
     psf_roft : torch.Tensor
-        The stack of PSFs to deconvolve the image with. The PSFs should be in the
-        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
-        M is the number of angles, and is L is number of radii the in the RoFT.
+        The stack of PSFs to deconvolve the image with. The PSFs should be in the Rotational Fourier domain.
+        Will be (L, M, L) where L is the number of PSFs/radii and M is the number of angles. See `rdmpy.calibrate.get_rdm_psfs` for details.
 
-    tv_reg : float, optional
-        The Total Variation regularization parameter. Default is 1e-10.
+    iters : int
+        The number of iterations to run the optimization.
 
-    l2_reg : float, optional
-        The L2 norm regularization parameter. Default is 1e-10.
+    lr : float
+        The learning rate of the optimizer.
 
-    l1_reg : float, optional
-        The L1 norm regularization parameter. Default is 0.
+    tv_reg : float
+        The Total Variation regularization parameter.
 
-    iters : int, optional
-        The number of iterations to run the optimization. Default is 150.
+    l2_reg : float
+        The L2 norm regularization parameter.
 
-    opt_params : dict, optional
+    l1_reg : float
+        The L1 norm regularization parameter.
+
+    opt_params : dict
         Ad optimization/regularization parameters to use for deconvolution.
         See `opt.py` for details.
 
-    use_batch_conv : bool, optional
-        Whether to use batched or unbatched lri convolution. The default is False.
+    warm_start : np.ndarray or torch.Tensor
+        The warm start for the optimization. If not provided, it will be initialized to `image`.
 
-    process : bool, optional
-        Whether to process the image before deconvolution. Default is True.
+    process : bool
+        Whether to process the image before deconvolution.
 
-    hot_pixel : bool, optional
-        Whether to remove hot pixels from the image. Default is False.
+    hot_pixel : bool
+        Whether to remove hot pixels from the image.
 
-    verbose : bool, optional
+    verbose : bool
         Whether to display a progress bar.
 
-    device : torch.device, optional
+    device : torch.device
         The device to use for the computation.
 
     Returns
     -------
     recon : torch.Tensor
-        The ring deconvolved image. Will be (N,N).
+        The ring deconvolved image.
 
     Notes
     -----
-    An implementation of `Ring Deconvolution Microscopy:
-    An Exact Solution for Spatially-Varying Aberration Correction"
-    https://arxiv.org/abs/2206.08928
+    Since this method takes advantage of rotationally symmetry, the input images must be square and
+    centered on the optical axis; for non-square inputs, one can either pad or crop the image to make it square.
+    Like other deconvolution methods, ring deconvolution is prone to ringing artifacts when
+    PSFs are large and there is significant noise. They often manifest as circles radiating out
+    from the center of the image. They can be reduced through regularization, especially if
+    the object is smooth or sparse.
+    """
 
+    if len(psf_roft.shape) != 3:
+        raise ValueError("Ring deconvolution needs a radial stack of PSF RoFTs")
+
+    # default optimization parameters
+    def_opt_params = {
+        "iters": iters,  # number of iterations to run the optimization
+        "optimizer": "adam",  # which optimizer to use for the iterative optimization
+        "lr": lr,  # learning rate of the optimizer
+        "init": "measurement",  # initialization of the reconstruction before optimization
+        "crop": 0,  # How much to crop out when considering the optimization loss
+        "tv_reg": tv_reg,  # Total variation regularization parameter
+        "l2_reg": l2_reg,  # L2 norm regularization parameter
+        "l1_reg": l1_reg,  # L1 norm regularization parameter
+        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
+        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
+        "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
+    }
+    def_opt_params.update(opt_params)
+
+    if process:
+        image = util.process(image, dim=image.shape[-2:], hot_pix=hot_pixel) * 0.9
+
+    if not torch.is_tensor(image):
+        image = torch.tensor(image)
+    if image.device is not device:
+        image = image.to(device)
+
+    if psf_roft.device is not device:
+        psf_roft = psf_roft.to(device)
+
+    if warm_start is not None:
+        warm_start = torch.tensor(warm_start)
+        if warm_start.device is not device:
+            warm_start = warm_start.to(device)
+
+    recon = opt.image_recon(
+        image.float(),
+        psf_roft,
+        model="lri",
+        opt_params=def_opt_params,
+        warm_start=warm_start,
+        device=device,
+        verbose=verbose,
+    )
+
+    return recon
+
+
+def sheet_deconvolve(
+    image_stack,
+    psf_stack,
+    iters=150,
+    lr=1e-3,
+    tv_reg=0,
+    l2_reg=0,
+    l1_reg=0,
+    opt_params={},
+    warm_start=None,
+    process=True,
+    hot_pixel=False,
+    verbose=True,
+    device=torch.device("cpu"),
+):
+    r"""Sheet deconvolve a volume.
+
+    This function deblurs a 3D volume imaged with a light sheet microscope, where the 0th axis is
+    the axis along which the light sheet is focused (i.e., spatially varying axis). It uses a
+    list of 3D PSFs, one at each location along the light sheet axis. Assuming symmetry of the light
+    sheet, only half the PSF locations are needed. Thus, len(psf_stack) = image_stack.shape[0] // 2.
+
+
+    Parameters
+    ----------
+    image_stack : np.ndarray or torch.Tensor
+        The volume to be deconvolved. Must be (M,N,L) where M is even.
+
+    psf_stack : list of torch.Tensors
+        The stack of light sheet PSFs to deconvolve the image with.
+        Must be a list of PSFs of length M//2.
+
+    iters : int,
+        The number of iterations to run the optimization.
+
+    lr : float,
+        The learning rate of the optimizer.
+
+    tv_reg : float,
+        The Total Variation regularization parameter.
+
+    l2_reg : float,
+        The L2 norm regularization parameter.
+
+    l1_reg : float,
+        The L1 norm regularization parameter.
+
+    opt_params : dict,
+        Optimization/regularization parameters to use for iterative deconvolution. See 'rdmpy.deblur.ring_deconvolve'
+        for details.
+
+    warm_start : np.ndarray or torch.Tensor,
+        The warm start for the optimization. If not provided, it will be initialized to `image_stack`.
+
+    process : bool,
+        Whether to process the image before deconvolution.
+
+    hot_pixel : bool,
+        Whether to remove hot pixels from the image.
+
+    verbose : bool,
+        Whether to display a progress bar.
+
+    device : torch.device,
+        The device to use for the computation.
+
+    Returns
+    -------
+    recon : torch.Tensor
+        The ring deconvolved image.
+
+    Notes
+    -----
+    Like other deconvolution methods, sheet deconvolution is prone to ringing artifacts when
+    PSFs are large and there is significant noise. They often manifest as lines perpendicular
+    to the spatially varying axis. They can be reduced through regularization, especially if
+    the object is smooth or sparse.
     """
 
     # default optimization parameters
@@ -102,168 +232,69 @@ def sheet_deconvolve(
     }
     def_opt_params.update(opt_params)
 
-    # if process:
-    #     image_stack = (
-    #         util.process(image_stack, dim=image_stack.shape[-2:], hot_pix=hot_pixel)
-    #         * 0.9
-    #     )
-
-    # if not torch.is_tensor(image_stack):
-    #     image_stack = torch.tensor(image_stack)
-
-    if warm_start is not None:
-        warm_start = torch.tensor(warm_start)
-        if warm_start.device is not device:
-            warm_start = warm_start.to(device)
-
-    if method == "autograd":
-        recon = opt.volume_recon(
-            image_stack,
-            psf_stack,
-            opt_params=def_opt_params,
-            warm_start=warm_start,
+    if hot_pixel:
+        _, image_stack = torch.from_numpy(
+            util.find_outlier_pixels(image_stack.cpu().numpy(), tolerance=0.5),
             device=device,
-            verbose=verbose,
         )
-    elif method == "manual":
-        recon = opt.volume_recon_manual(
-            image_stack,
-            psf_stack,
-            opt_params=def_opt_params,
-            warm_start=warm_start,
-            device=device,
-            verbose=verbose,
-        )
-    elif method == "cg":
-        recon = opt.volume_recon_cg_normal(
-            image_stack,
-            psf_stack,
-            opt_params=def_opt_params,
-            warm_start=warm_start,
-            preconditioner="jacobi",
-            center_vals=center_vals,
-            device=device,
-            verbose=verbose,
-        )
-    elif method == "scipy":
-        recon = opt.volume_recon_scipy(
-            image_stack, psf_stack, opt_params, device=device
-        )
-
-    return recon
-
-
-def ring_deconvolve(
-    image,
-    psf_roft,
-    tv_reg=1e-10,
-    l2_reg=1e-10,
-    l1_reg=0,
-    iters=150,
-    opt_params={},
-    warm_start=None,
-    use_batch_conv=False,
-    process=True,
-    hot_pixel=False,
-    verbose=True,
-    device=torch.device("cpu"),
-):
-    """
-    Ring deconvolves an image with a stack of PSFs.
-
-    Parameters
-    ----------
-    image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (N,N), (C,N,N), or (B,C,N,N).
-
-    psf_roft : torch.Tensor
-        The stack of PSFs to deconvolve the image with. The PSFs should be in the
-        Rotational Fourier domain. Should be (N, M, L) where N is the number of PSFs,
-        M is the number of angles, and is L is number of radii the in the RoFT.
-
-    tv_reg : float, optional
-        The Total Variation regularization parameter. Default is 1e-10.
-
-    l2_reg : float, optional
-        The L2 norm regularization parameter. Default is 1e-10.
-
-    l1_reg : float, optional
-        The L1 norm regularization parameter. Default is 0.
-
-    iters : int, optional
-        The number of iterations to run the optimization. Default is 150.
-
-    opt_params : dict, optional
-        Ad optimization/regularization parameters to use for deconvolution.
-        See `opt.py` for details.
-
-    use_batch_conv : bool, optional
-        Whether to use batched or unbatched lri convolution. The default is False.
-
-    process : bool, optional
-        Whether to process the image before deconvolution. Default is True.
-
-    hot_pixel : bool, optional
-        Whether to remove hot pixels from the image. Default is False.
-
-    verbose : bool, optional
-        Whether to display a progress bar.
-
-    device : torch.device, optional
-        The device to use for the computation.
-
-    Returns
-    -------
-    recon : torch.Tensor
-        The ring deconvolved image. Will be (N,N).
-
-    Notes
-    -----
-    An implementation of `Ring Deconvolution Microscopy:
-    An Exact Solution for Spatially-Varying Aberration Correction"
-    https://arxiv.org/abs/2206.08928
-
-    """
-    if len(psf_roft.shape) != 3:
-        raise ValueError("Ring deconvolution needs a radial stack of PSF RoFTs")
-
-    # default optimization parameters
-    def_opt_params = {
-        "iters": iters,  # number of iterations to run the optimization
-        "optimizer": "adam",  # which optimizer to use for the iterative optimization
-        "lr": 7.5e-2,  # learning rate of the optimizer
-        "init": "measurement",  # initialization of the reconstruction before optimization
-        "crop": 0,  # How much to crop out when considering the optimization loss
-        "tv_reg": tv_reg,  # Total variation regularization parameter
-        "l2_reg": l2_reg,  # L2 norm regularization parameter
-        "l1_reg": l1_reg,  # L1 norm regularization parameter
-        "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
-        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
-        "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
-    }
-    def_opt_params.update(opt_params)
-
     if process:
-        image = util.process(image, dim=image.shape[-2:], hot_pix=hot_pixel) * 0.9
+        image_stack = util.normalize(image_stack) * 0.9
 
-    if not torch.is_tensor(image):
-        image = torch.tensor(image)
+    # TODO assert that PSF is the right shape
+
+    if not torch.is_tensor(image_stack):
+        image_stack = torch.tensor(image_stack)
+
+    image_stack = image_stack.to(device)
 
     if warm_start is not None:
         warm_start = torch.tensor(warm_start)
         if warm_start.device is not device:
             warm_start = warm_start.to(device)
 
-    recon = opt.image_recon(
-        image.to(device).float(),
-        psf_roft.to(device),
-        model="lri",
+    recon = opt.volume_recon(
+        image_stack,
+        psf_stack,
         opt_params=def_opt_params,
         warm_start=warm_start,
-        use_batch_conv=use_batch_conv,
-        device=device,
         verbose=verbose,
+        device=device,
     )
+
+    # TODO: Add additional optimization methods
+    # if method == "autograd":
+    #     recon = opt.volume_recon(
+    #         image_stack,
+    #         psf_stack,
+    #         opt_params=def_opt_params,
+    #         warm_start=warm_start,
+    #         device=device,
+    #         verbose=verbose,
+    #     )
+    # elif method == "manual":
+    #     recon = opt.volume_recon_manual(
+    #         image_stack,
+    #         psf_stack,
+    #         opt_params=def_opt_params,
+    #         warm_start=warm_start,
+    #         device=device,
+    #         verbose=verbose,
+    #     )
+    # elif method == "cg":
+    #     recon = opt.volume_recon_cg_normal(
+    #         image_stack,
+    #         psf_stack,
+    #         opt_params=def_opt_params,
+    #         warm_start=warm_start,
+    #         preconditioner="jacobi",
+    #         center_vals=center_vals,
+    #         device=device,
+    #         verbose=verbose,
+    #     )
+    # elif method == "scipy":
+    #     recon = opt.volume_recon_scipy(
+    #         image_stack, psf_stack, opt_params, device=device
+    #     )
 
     return recon
 
@@ -274,15 +305,17 @@ def deeprd(
     sharpness=1.25,
     model_path=None,
     noisy=False,
+    warm_start=None,
     process=True,
     hot_pixel=False,
     verbose=True,
-    deconvolved=None,
     device=torch.device("cpu"),
 ):
-    """
+    """Deblur an image using DeepRD.
 
-    Deblurs an image with a stack of PSFs using DeepRD.
+    Deep ring deconvolution is a deep-learning version of ring deconvolution. It uses a
+    a hypernetwork to map Seidel coefficients to a coefficient-specific deblurring neural network.
+    Then the deblurring network is used to deblur the input image.
 
     Parameters
     ----------
@@ -290,36 +323,42 @@ def deeprd(
         The image to be deconvolved. Must be either (512,512) or (1024, 1024).
 
     seidel_coeffs : torch.Tensor
-        The Seidel coefficient of the system
+        The 6 Seidel coefficient of the system including defocus. Format is [sphere, coma, astigmatism, field curvature, distortion, defocus].
 
-    sharpness : float, optional
+    sharpness : float
         The sharpness parameter for the DeepRD model. Scales the Seidel coefficients to account for out-of-distribution data.
-        Default is 1.5.
 
-    model_path : str, optional
-        The path to the pretrained DeepRD model. Default is
-        "dl_models/pretrained/deeprd_22001".
+    model_path : str
+        The path to the pretrained DeepRD model. Will default to our pretrained models.
 
-    process : bool, optional
+    noisy : bool
+        Whether to remove noise from the image via thresholding. Use when there are significant noise-related artifacts.
+
+    warm_start : np.ndarray or torch.Tensor
+        The warm start initialization for the model. If not provided, it will be initialized to input image deconvolved with the center Seidel PSF.
+
+    process : bool
         Whether to process the image before deconvolution. Default is True.
 
-    hot_pixel : bool, optional
+    hot_pixel : bool
         Whether to remove hot pixels from the image. Default is False.
 
-    verbose : bool, optional
+    verbose : bool
         Whether to print updates.
 
-    deconvolved : np.ndarray or torch.Tensor, optional
-        The standard deconvolved image for initialization. If not provided, it will be computed using the center Seidel PSF.
-
-    device : torch.device, optional
+    device : torch.device
         The device to use for the computation.
 
     Returns
     -------
     recon : torch.Tensor
-        The deblurred image. Will be (N,N).
+        The deblurred image.
 
+    Notes
+    -----
+    DeepRD, like other deep learning models, is subject to unpredicatble errors/artifacts in the presence of
+    out-of-distribution data. It is recommended to use the model on data that is similar to the training data or
+    finetune the model on your data.
     """
 
     if process:
@@ -346,6 +385,7 @@ def deeprd(
         elif image.shape[0] == 1024:
             model_path = "dl_models/pretrained/deeprd_1024"
         else:
+            # TODO: Add support for other image sizes
             raise ValueError("Image size not supported")
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -353,23 +393,23 @@ def deeprd(
 
     model = util.load_model(model_seidelnet, ckpt_path, device=device)
 
-    if deconvolved is None:
-        center_psf = get_psfs(
+    if warm_start is None:
+        center_psf = get_rdm_psfs(
             seidel_coeffs=seidel_coeffs, dim=image.shape[0], model="lsi", device=device
         )
 
-        deconvolved = deconvolve(image, center_psf, method="wiener", device=device)
-        deconvolved = deconvolved.to(device)
+        warm_start = deconvolve(image, center_psf, method="wiener", device=device)
+        warm_start = warm_start.to(device)
     else:
-        if not torch.is_tensor(deconvolved):
-            deconvolved = torch.tensor(deconvolved)
-        if deconvolved.device is not device:
-            deconvolved = deconvolved.to(device)
+        if not torch.is_tensor(warm_start):
+            warm_start = torch.tensor(warm_start)
+        if warm_start.device is not device:
+            warm_start = warm_start.to(device)
 
     if verbose:
         print("deblurring...")
 
-    input = torch.stack((image.float() - 0.5, deconvolved.float() - 0.5))
+    input = torch.stack((image.float() - 0.5, warm_start.float() - 0.5))
     output = torch.clip(model(input, sharpness * seidel_coeffs.T) + 0.5, 0, 1)
     recon = util.tensor_to_np(output)
 
@@ -383,10 +423,11 @@ def deconvolve(
     image,
     psf,
     method="wiener",
+    iters=150,
+    lr=7.5e-2,
     tv_reg=1e-9,
     l2_reg=1e-9,
     l1_reg=1e-9,
-    iters=150,
     balance=3e-4,
     opt_params={},
     process=True,
@@ -394,9 +435,7 @@ def deconvolve(
     verbose=True,
     device=torch.device("cpu"),
 ):
-    """
-
-    Deconvolves an image with a PSF.
+    """Deconvolve an image with a PSF.
 
     Parameters
     ----------
@@ -406,30 +445,36 @@ def deconvolve(
     psf : torch.Tensor
         The PSF to deconvolve the image with. Must be (M,N).
 
-    method : str, optional
+    method : str
         The deconvolution method to use. Options are "wiener" and "iter".
         Default is "wiener".
 
-    tv_reg : float, optional
+    iters : int
+        The number of iterations to run the optimization. Default is 150.
+
+    lr : float
+        The learning rate of the optimizer. Default is 7.5e-2.
+
+    tv_reg : float
         The TV regularization parameter. Default is 1e-10. (iter only)
 
-    l2_reg : float, optional
+    l2_reg : float
         The L2 regularization parameter. Default is 1e-10. (iter only)
 
-    balance : float, optional
+    balance : float
         The balance parameter for the wiener filter. Default is 3e-4.
 
-    opt_params : dict, optional
+    opt_params : dict
         The optimization/regularization parameters to use for deconvolution.
         See `opt.py` for details.
 
-    process : bool, optional
+    process : bool,
         Whether to process the image before deconvolution. Default is True.
 
-    verbose : bool, optional
+    verbose : bool
         Whether to display a progress bar (only for 'iter')
 
-    device : torch.device, optional
+    device : torch.device
         The device to use for the computation.
 
     Returns
@@ -451,7 +496,7 @@ def deconvolve(
     def_opt_params = {
         "iters": iters,  # number of iterations to run the optimization
         "optimizer": "adam",  # which optimizer to use for the iterative optimization
-        "lr": 7.5e-2,  # learning rate of the optimizer
+        "lr": lr,  # learning rate of the optimizer
         "init": "measurement",  # initialization of the reconstruction before optimization
         "crop": 0,  # How much to crop out when considering the optimization loss
         "tv_reg": tv_reg,  # Total variation regularization parameter
@@ -505,8 +550,9 @@ def deconvolve(
 def blind(
     image,
     get_psf=False,
-    balance=3e-4,
     iters=100,
+    lr=7.5e-2,
+    balance=3e-4,
     opt_params={},
     sys_params={},
     process=True,
@@ -514,56 +560,63 @@ def blind(
     verbose=True,
     device=torch.device("cpu"),
 ):
-    """
-
-    Blind deconvolves an image.
+    """Deconvolve an image with no PSF.
 
     Parameters
     ----------
     image : np.ndarray or torch.Tensor
-        The image to be deconvolved. Must be (M,N).
+        The image to be deconvolved.
 
-    get_psf : bool, optional
-        Whether to return the PSF. Default is False.
+    get_psf : bool
+        Whether to return the PSF.
 
-    balance : float, optional
-        The balance parameter for the wiener filter. Default is 3e-4.
+    iters : int
+        The number of iterations to run the optimization.
 
-    iters : int, optional
-        The number of iterations to run the optimization. Default is 100.
+    lr : float
+        The learning rate of the optimizer.
 
-    opt_params : dict, optional
+    balance : float
+        The balance parameter for the wiener filter.
+
+    opt_params : dict
         The optimization/regularization parameters to use for deconvolution.
 
-    sys_params : dict, optional
-        The parameters to use for the optical system. See `seidel.py` for details.
+    sys_params : dict
+        The parameters to use for the optical system. See `rdmpy.calibrate` for details.
 
-    process : bool, optional
+    process : bool
         Whether to process the image before deconvolution. Default is True.
 
-    hot_pixel : bool, optional
+    hot_pixel : bool
         Whether to remove hot pixels from the image. Default is False.
 
-    verbose : bool, optional
+    verbose : bool
         Whether to display a progress bar (only for 'iter')
 
-    device : torch.device, optional
+    device : torch.device
         The device to use for the computation.
 
     Returns
     -------
     recon : torch.Tensor
-        The deconvolved image. Will be (N,N).
+        The deconvolved image.
 
     psf : torch.Tensor  (only if get_psf=True)
-        The estimated PSF. Will be (N,N).
+        The estimated PSF.
 
+    Notes
+    -----
+    The blind deconvolution uses a heuristic measure of image sharpness as a loss function.
+    Thus, it is possible when there is sufficient noise that the PSF will be estimated to be
+    overly large and thus cause an over-sharping of the image. In such cases, reduce the number of interations
+    to effecively regularize the optimization.
     """
 
     def_opt_params = {
         "iters": iters,  # number of iterations to run the optimization
         "optimizer": "adam",  # which optimizer to use for the iterative optimization
-        "lr": 7.5e-2,  # learning rate of the optimizer
+        "lr": lr,  # learning rate of the optimizer
         "init": "measurement",  # initialization of the reconstruction before optimization
         "seidel_init": None,  # initialization of the seidel coefficients before optimization
         "crop": 0,  # How much to crop out when considering the optimization loss

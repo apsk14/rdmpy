@@ -15,37 +15,10 @@ from skimage.morphology import erosion, disk
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import pdb
 
-# from cv2 import VideoWriter, VideoWriter_fourcc
 
 PLT_SIZE = 5
-
-
-# def write_video(path, array, fps=float(24)):
-#     """
-#     Writes a video from stack of images
-
-#     Parameters
-#     ----------
-#     path : str
-#         Path to save video to.
-
-#     array : np.ndarray
-#         Stack of frames to convert to video.
-
-#     fps : float, optional
-#         Frames per second of video.
-
-#     Returns
-#     -------
-#     None
-#     """
-
-#     fourcc = VideoWriter_fourcc(*"mp4v")
-#     video = VideoWriter(path, fourcc, fps, (array.shape[2], array.shape[1]), False)
-#     for i in range(array.shape[0]):
-#         video.write((array[i, :, :] * 255).astype(np.uint8))
-#     video.release()
 
 
 def get_calib_info(calib_image, dim, fit_params):
@@ -468,16 +441,15 @@ def shift_torch(img, shift, mode="bilinear"):
     img : torch.Tensor
         Shifted image.
     """
-    xs = np.arange(0, img.shape[1]) - shift[1]
-    ys = np.arange(0, img.shape[0]) - shift[0]
-    x, y = np.meshgrid(xs, ys)
+    device = img.device
+    xs = torch.arange(0, img.shape[1]).float() - shift[1]
+    ys = torch.arange(0, img.shape[0]).float() - shift[0]
+    x, y = torch.meshgrid(xs, ys, indexing="xy")
 
     gx = 2.0 * (x / (img.shape[1] - 1)) - 1.0
     gy = 2.0 * (y / (img.shape[0] - 1)) - 1.0
 
-    grid = torch.tensor(
-        np.concatenate((gx[:, :, None], gy[:, :, None]), axis=2), device=img.device
-    )
+    grid = torch.cat((gx[:, :, None], gy[:, :, None]), dim=2).to(device)
 
     return grid_sample(
         img[None, None, :, :].float(),

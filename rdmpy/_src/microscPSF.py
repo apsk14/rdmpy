@@ -1,29 +1,6 @@
 #!/usr/bin/env python
 """
-Generate a PSF using the Gibson and Lanni model.
-
-Note: All distance units are microns.
-
-This is slightly reworked version of the Python code provided by Kyle
-Douglass, "Implementing a fast Gibson-Lanni PSF solver in Python".
-
-http://kmdouglass.github.io/posts/implementing-a-fast-gibson-lanni-psf-solver-in-python.html
-
-
-References:
-
-1. Li et al, "Fast and accurate three-dimensional point spread function computation
-   for fluorescence microscopy", JOSA, 2017.
-
-2. Gibson, S. & Lanni, F. "Experimental test of an analytical model of
-   aberration in an oil-immersion objective lens used in three-dimensional
-   light microscopy", J. Opt. Soc. Am. A 9, 154-166 (1992), [Originally
-   published in J. Opt. Soc. Am. A 8, 1601-1613 (1991)].
-
-3. Kirshner et al, "3-D PSF fitting for fluorescence microscopy: implementation
-   and localization application", Journal of Microscopy, 2012.
-
-Hazen 04/18
+Code was modified from the original code: https://github.com/MicroscPSF/MicroscPSF-Py
 """
 import cmath
 import math
@@ -41,74 +18,6 @@ import torch.nn.functional as F
 # Internal constants.
 num_basis = 100  # Number of rescaled Bessels that approximate the phase function.
 rho_samples = 1000  # Number of pupil sample along the radial direction.
-
-# Microscope parameters.
-m_params = {
-    "M": 100.0,  # magnification
-    "NA": 1.4,  # numerical aperture
-    "ng0": 1.515,  # coverslip RI design value
-    "ng": 1.515,  # coverslip RI experimental value
-    "ni0": 1.515,  # immersion medium RI design value
-    "ni": 1.515,  # immersion medium RI experimental value
-    "ns": 1.33,  # specimen refractive index (RI)
-    "ti0": 150,  # microns, working distance (immersion medium thickness) design value
-    "tg": 170,  # microns, coverslip thickness experimental value
-    "tg0": 170,  # microns, coverslip thickness design value
-    "zd0": 200.0 * 1.0e3,
-}  # microscope tube length (in microns).
-
-
-# Microscope parameters.
-
-
-def get_m_params_torch(device=torch.device("cpu")):
-
-    m_params_torch = {
-        "M": torch.tensor(100.0, device=device),  # magnification
-        "NA": torch.tensor(1.2, device=device),  # numerical aperture
-        "ng0": torch.tensor(1.5, device=device),  # coverslip RI design value
-        "ng": torch.tensor(1.5, device=device),  # coverslip RI experimental value
-        "ni0": torch.tensor(1.5, device=device),  # immersion medium RI design value
-        "ni": torch.tensor(
-            1.5, device=device
-        ),  # immersion medium RI experimental value
-        "ns": torch.tensor(1.33, device=device),  # specimen refractive index (RI)
-        "ti0": torch.tensor(
-            150, device=device
-        ),  # microns, working distance (immersion medium thickness) design value
-        "tg": torch.tensor(
-            170, device=device
-        ),  # microns, coverslip thickness experimental value
-        "tg0": torch.tensor(
-            170, device=device
-        ),  # microns, coverslip thickness design value
-        "zd0": torch.tensor(200.0 * 1.0e3, device=device),
-        "depth": torch.tensor(-0.5, device=device),
-    }  # microscope tube length (in microns).
-
-    # m_params_torch = {
-    #     "M": torch.tensor(100.0, device=device),  # magnification
-    #     "NA": torch.tensor(1.0, device=device),  # numerical aperture
-    #     "ng0": torch.tensor(1.0, device=device),  # coverslip RI design value
-    #     "ng": torch.tensor(1.0, device=device),  # coverslip RI experimental value
-    #     "ni0": torch.tensor(1.0, device=device),  # immersion medium RI design value
-    #     "ni": torch.tensor(
-    #         1.0, device=device
-    #     ),  # immersion medium RI experimental value
-    #     "ns": torch.tensor(1.0, device=device),  # specimen refractive index (RI)
-    #     "ti0": torch.tensor(
-    #         150, device=device
-    #     ),  # microns, working distance (immersion medium thickness) design value
-    #     "tg": torch.tensor(
-    #         0, device=device
-    #     ),  # microns, coverslip thickness experimental value
-    #     "tg0": torch.tensor(
-    #         0, device=device
-    #     ),  # microns, coverslip thickness design value
-    #     "zd0": torch.tensor(200.0 * 1.0e3, device=device),
-    # }  # microscope tube length (in microns).
-
-    return m_params_torch
 
 
 def differentiable_arange(start, end, step, device):
@@ -449,7 +358,7 @@ def gLZRScan_torch(
 
     # Normalize to the maximum value
     if normalize:
-        PSF_rz.data = PSF_rz / PSF_rz.max()
+        PSF_rz.data = PSF_rz / PSF_rz.sum()
 
     return PSF_rz
 
@@ -654,7 +563,7 @@ def psfRZToPSFXYZ_torch(dxy, xy_size, rv, PSF_rz, device=torch.device("cpu")):
     # Create XY grid of radius values.
     c_xy = float(xy_size) * 0.5
     grid = torch.arange(0, xy_size, device=device)
-    xy = torch.stack(torch.meshgrid(grid, grid)) + 0.5
+    xy = torch.stack(torch.meshgrid(grid, grid, indexing="xy")) + 0.5
     r_pixel = dxy * torch.sqrt(
         (xy[1] - c_xy) * (xy[1] - c_xy) + (xy[0] - c_xy) * (xy[0] - c_xy)
     )

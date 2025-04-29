@@ -171,8 +171,7 @@ def compute_psfs(
     radius_over_z = np.tan(np.arcsin(sys_params["NA"]))
     k = (2 * np.pi) / lamb
     fx = torch.linspace(-1 / (2 * dt), 1 / (2 * dt), samples, device=device)
-    # [Fx, Fy] = torch.meshgrid((fx, fx), indexing="xy")
-    [Fy, Fx] = torch.meshgrid((fx, fx))
+    [Fx, Fy] = torch.meshgrid((fx, fx), indexing="xy")
     scale_factor = lamb / radius_over_z
     circle = circ(
         torch.sqrt(torch.square(Fx) + torch.square(Fy)) * scale_factor, radius=1
@@ -262,124 +261,129 @@ def compute_psfs(
     return desired_psfs
 
 
-def get_ls_psfs(
-    coeffs,
+def compute_ls_psfs(
     waist,
     spread,
-    defocus_rate,
-    x,
-    norm_x,
-    dx,
-    dz,
-    dim,
+    gl_params,
+    num_psfs,
+    xy_dim,
     zmax,
-    wavelength,
-    NA,
-    gl_params=None,
+    oversample=2,
+    verbose=True,
     device=torch.device("cpu"),
 ):
-    if zmax % 2 != 0:
-        zmax = zmax + 1
 
-    sigma = waist * torch.sqrt(1 + ((x) / spread) ** 2)
-
-    z = torch.linspace(-(zmax // 2), zmax // 2, 2 * zmax, device=device) * dz * 1e-3
-    gaussian_weight = torch.exp(-((z**2) / (2 * waist**2))).to(device)
-    gaussian_weight = gaussian_weight / gaussian_weight.sum()
-    norm_factor = gaussian_weight.max()
-
-    z_dim = int(torch.floor((6 * sigma) / dz))
-
-    # round z_dim to nearest even number
-    z_dim = z_dim + 1 if z_dim % 2 != 0 else z_dim
-
-    # starts at 1 compute remainder to make PSFs vary smoothly
-    remainder = (((6 * sigma) / dz) - z_dim) / 2
-
-    if z_dim > zmax:
-        z_dim = zmax
-        remainder = 0
-
-    return compute_GL_psf(
-        norm_x,
-        dim,
-        NA,
-        zmax,
-        remainder,
-        dx,
-        dz,
-        wavelength,
-        coeffs,
-        defocus_rate,
-        sigma,
-        gl_params,
-        norm_factor,
-        device,
+    psf_cube_list = []
+    z = (
+        torch.linspace(-(zmax // 2), zmax // 2, oversample * zmax, device=device)
+        * gl_params["dz"]
     )
-
-
-def compute_GL_psf(
-    x,
-    dim,
-    NA,
-    z_dim,
-    remainder,
-    dx,
-    dz,
-    wavelength,
-    coeffs,
-    defocus_rate,
-    sigma,
-    gl_params,
-    norm_factor,
-    device,
-):
-
-    radius_over_z = torch.tan(
-        torch.arcsin(torch.tensor(NA))
-    )  # radius length in the fourier domain
-    L = ((dim) * (wavelength)) / (4 * (radius_over_z))
-    # dx = L / dim
-    mp = msPSF.get_m_params_torch(device=device)
-    mp.update(gl_params)
-    # mp["NA"] = gl_params
-    # zv = torch.linspace(-z_dim // 2, z_dim // 2, z_dim, device=device) * dz * 1e3
-    z = torch.linspace(-(z_dim // 2), z_dim // 2, 2 * z_dim, device=device) * dz
-    # zv = torch.arange(-1.5, 1.5, 0.2, device=device)
-
-    psf_cube = msPSF.gLXYZFocalScan_torch(
-        mp,
-        dxy=dx,
-        xy_size=2 * dim,
+    gl_psf = msPSF.gLXYZFocalScan_torch(
+        gl_params,
+        dxy=gl_params["dx"] / oversample,
+        xy_size=oversample * xy_dim,
         zv=z,
         normalize=True,
-        pz=mp["depth"],
-        wvl=0.6,
-        zd=None,
+        wvl=gl_params["wavelength"],
         device=device,
     ).permute(1, 2, 0)
 
-    # now apply gaussian along the 3rd dimension
-    # z = torch.linspace(-(z_dim // 2), z_dim // 2, z_dim) * dz * 1e-3
-    # z = z.to(device)
-    # gaussian blur the psf_cube
+    iterable_coords = tqdm(range(num_psfs)) if verbose else range(num_psfs)
 
-    z = z * 1e-3
+    for i in iterable_coords:
+        # where along the light sheet axis is the current psf
+        lateral_pos = i * gl_params["dx"]
+        curr_psf = compute_GL_psf(
+            lateral_pos=lateral_pos,
+            waist=waist,
+            spread=spread,
+            gl_params=gl_params,
+            xy_dim=xy_dim,
+            zmax=zmax,
+            oversample=oversample,
+            precomputed_psf=gl_psf,
+            device=device,
+        )
+        psf_cube_list += [curr_psf]
 
-    gaussian_weight = torch.exp(-((z**2) / (2 * sigma**2))).to(device)
-    gaussian_weight = gaussian_weight / gaussian_weight.sum()
-    # pdb.set_trace()
-    psf_cube = gaussian_weight * psf_cube
+    for i in range(len(psf_cube_list)):
+        psf_cube_list[i] = psf_cube_list[i] / psf_cube_list[-1].sum()
+
+    return psf_cube_list
+
+
+def compute_GL_psf(
+    lateral_pos,
+    waist,
+    spread,
+    gl_params,
+    xy_dim,
+    zmax,
+    oversample=2,
+    precomputed_psf=None,
+    device=torch.device("cpu"),
+):
+    # Get the axial spread and extent that lateral position
+    sigma = waist * torch.sqrt(1 + ((lateral_pos) / spread) ** 2)
+    if zmax % 2 != 0:
+        zmax = zmax + 1
+    z_dim = int(torch.floor((6 * sigma) / gl_params["dz"]))
+    # round z_dim to nearest even number
+    z_dim = z_dim + 1 if z_dim % 2 != 0 else z_dim
+    if z_dim > zmax:
+        z_dim = zmax
+
+    # Get the z grid along which the PSF will be evaluated.
+    z = (
+        torch.linspace(-(z_dim // 2), z_dim // 2, oversample * z_dim, device=device)
+        * gl_params["dz"]
+    )
+
+    if precomputed_psf is None:
+        curr_psf = msPSF.gLXYZFocalScan_torch(
+            gl_params,
+            dxy=gl_params["dx"] / oversample,
+            xy_size=oversample * xy_dim,
+            zv=z,
+            normalize=True,
+            wvl=gl_params["wavelength"],
+            device=device,
+        ).permute(1, 2, 0)
+    else:
+        # trim both sides of precomputed psf so that it's last dimension is of length z_dim
+        curr_psf = precomputed_psf[
+            :,
+            :,
+            int(((precomputed_psf.shape[2] - (z_dim * oversample)) / 2)) : int(
+                (precomputed_psf.shape[2] + (z_dim * oversample)) / 2
+            ),
+        ]
+
+    z_full = (
+        torch.linspace(-(zmax // 2), zmax // 2, oversample * zmax, device=device)
+        * gl_params["dz"]
+    )
+
+    gaussian_weight = (waist / sigma) * torch.exp(
+        -((z_full**2) / (2 * sigma**2))
+    ).to(device)
+    # gaussian_weight = gaussian_weight / gaussian_weight.sum()
+
+    # truncate z full on either side so its the same length as z
+    gaussian_weight = gaussian_weight[
+        int((z_full.shape[0] - z.shape[0]) / 2) : int(
+            (z_full.shape[0] + z.shape[0]) / 2
+        )
+    ]
+
+    curr_psf = gaussian_weight * curr_psf
+
     # downsample by a factor of 2
-    psf_cube = interpolate(
-        psf_cube[None, None, :, :, :], scale_factor=0.5, mode="nearest"
+    curr_psf = interpolate(
+        curr_psf[None, None, :, :, :], scale_factor=1 / oversample, mode="trilinear"
     ).squeeze()
-    # psf_cube = psf_cube**2
-    # psf_cube[psf_cube < torch.quantile(psf_cube, 0.9)] = 0
-    # psf_cube = psf_cube / psf_cube.sum()
-    psf_cube /= norm_factor
 
-    return psf_cube  # / psf_cube.max()  # / psf_cube.max()  # / psf_cube.sum()
+    return curr_psf
 
 
 def make_gaussian(var, dim, L, device):
@@ -404,7 +408,7 @@ def make_gaussian(var, dim, L, device):
 
     """
     x = torch.linspace(-L / 2, L / 2, dim + 1, device=device)[1:] * 1e6
-    X, Y = torch.meshgrid(x, x)
+    X, Y = torch.meshgrid(x, x, indexing="ij")
     kernel = torch.exp(-((X**2) / (2 * var[0]) + (Y**2) / (2 * var[1])))
 
     # pdb.set_trace()

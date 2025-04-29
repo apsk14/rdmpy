@@ -1,5 +1,5 @@
 """
-Impelmetation of polar transform for pytorch. This is a modified version of the 
+Impelmetation of polar transform for pytorch. This is a modified version of the
 polar transform from the following repository: https://github.com/addisonElliott/polarTransform
 """
 
@@ -467,6 +467,7 @@ def batchimg2polar(
     theta, r = torch.meshgrid(
         torch.tensor(theta, device=img.device),
         torch.tensor(radii, device=img.device),
+        indexing="xy",
     )
     center = torch.tensor(center, device=img.device)
     xCartesian, yCartesian = getCartesianPointsTorch(r, theta, center)
@@ -570,7 +571,7 @@ def batchpolar2img(
     # Get list of cartesian x and y coordinate and create a 2D create of the coordinates
     xs = torch.arange(0, imageSize[-1], device=img.device)
     ys = torch.arange(0, imageSize[-2], device=img.device)
-    y, x = torch.meshgrid(ys, xs)
+    x, y = torch.meshgrid(ys, xs, indexing="xy")
 
     # Take cartesian grid and convert to polar coordinates
     r, theta = getPolarPointsTorch(x, y, center)
