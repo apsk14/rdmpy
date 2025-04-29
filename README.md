@@ -1,10 +1,10 @@
 # rdmpy: Spatially-varying deblurring in Python.
 
-[![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://www.nature.com/articles/s41592-025-02684-5#Sec12)
+[![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://www.nature.com/articles/s41592-025-02684-5)
 
 ## UPDATES:
 * [April 2025] MAJOR UPDATE!
-  * Our paper is officially published in [Nature Methods](https://www.nature.com/articles/s41592-025-02684-5#Sec12).
+  * Our paper is officially published in [Nature Methods](https://www.nature.com/articles/s41592-025-02684-5).
   * The codebase has been updated to accomodat the latest depdendency updates. See the updated package versioning below.
   * RDMPY will become pip installable this week!
   * Please don't hesistate to reach out with any bug finds or desired features. We will continue to create new releases every few months
