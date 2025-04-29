@@ -1,6 +1,7 @@
 # rdmpy: Spatially-varying deblurring in Python.
 
-[![Paper](https://img.shields.io/badge/Nature%20methods%3A%2010.1038%2Fs41592-025-02684-5-yellow.svg)](https://www.nature.com/articles/s41592-025-02684-5)
+[(![Static Badge](https://img.shields.io/badge/Nature%20Methods%3A%2010.1038%2Fs41592-025-02684-5)
+)](https://www.nature.com/articles/s41592-025-02684-5)
 
 ## UPDATES:
 * [April 2025] MAJOR UPDATE!
