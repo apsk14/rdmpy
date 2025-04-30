@@ -23,7 +23,6 @@ The official rdmpy python package will be released the first week of May (next w
   * Now run deconvolution up to 15x faster!
   * Run batched ring convolution up to 100x faster!
 * [August 30th 2023] Introducing RDMPY v1!
-  * Official PyPI package to follow shortly.
   * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).
   * Please contact me if you have any issues or have ideas for the package!
 
