@@ -2,6 +2,9 @@
 
 [![Static Badge](https://img.shields.io/badge/paper-Nature%20Methods-yellow)](https://www.nature.com/articles/s41592-025-02684-5)
 
+## Announcement
+The official rdmpy python package will be released the first week of May (next week!!!). If you have any feature suggestions or ideas please don't hesitate to reach out.
+
 
 ## UPDATES:
 * [April 2025] MAJOR UPDATE!
