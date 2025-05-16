@@ -3,14 +3,14 @@
 [![Static Badge](https://img.shields.io/badge/paper-Nature%20Methods-yellow)](https://www.nature.com/articles/s41592-025-02684-5)
 
 ## Announcement
-The official rdmpy python package will be released the first week of May (next week!!!) on PyPI and will be pip installable. If you have any feature suggestions or ideas please don't hesitate to reach out.
+The official rdmpy python package will be released in May on PyPI and will be pip installable. If you have any feature suggestions or ideas please don't hesitate to reach out.
 
 
 ## UPDATES:
 * [April 2025] MAJOR UPDATE!
   * Our paper is officially published in [Nature Methods](https://www.nature.com/articles/s41592-025-02684-5).
   * The codebase has been updated to accomodate the latest dependency updates. See the updated package versioning below.
-  * RDMPY will become pip installable this week!
+  * RDMPY will become pip installable soon!
   * Please don't hesistate to reach out with any bug finds or desired features. We will continue to create new releases every few months
 * [November 2024] MAJOR UPDATE!
   * Added Sheet convolution/deconvolution for deblurring images from light-sheet microscopes. Check out experiments/light-sheet.ipynb.
