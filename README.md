@@ -9,7 +9,7 @@ The official rdmpy python package will be released in May on PyPI and will be pi
 ## UPDATES:
 * [May 2025]
   * We can now do patchwise ring deconvolution! This allows for much larger images (upward of 2048x2048) to be ring   deconvolved faster with less memory useage. If you want to increase speed and decrease memory useage just increase the patch_size argument.
-  * To try this new feature, check out the large_image.ipynb notebook. We are able to ring deconvolve much larger crops than in our paper.
+  * To try this new feature, check out the large_images.ipynb notebook. We are able to ring deconvolve much larger image crops than in our paper.
   * Patchwise sheet deconvolution will be coming shortly!
 
 * [April 2025] MAJOR UPDATE!
