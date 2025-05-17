@@ -1,8 +1,17 @@
 # rdmpy: Spatially-varying deblurring in Python.
 
-[![Paper](https://img.shields.io/badge/paper-%09arXiv%3A2003.12673-yellow.svg)](https://arxiv.org/abs/2206.08928)
+[![Static Badge](https://img.shields.io/badge/paper-Nature%20Methods-yellow)](https://www.nature.com/articles/s41592-025-02684-5)
+
+## Announcement
+The official rdmpy python package will be released in May on PyPI and will be pip installable. If you have any feature suggestions or ideas please don't hesitate to reach out.
+
 
 ## UPDATES:
+* [April 2025] MAJOR UPDATE!
+  * Our paper is officially published in [Nature Methods](https://www.nature.com/articles/s41592-025-02684-5).
+  * The codebase has been updated to accomodate the latest dependency updates. See the updated package versioning below.
+  * RDMPY will become pip installable soon!
+  * Please don't hesistate to reach out with any bug finds or desired features. We will continue to create new releases every few months
 * [November 2024] MAJOR UPDATE!
   * Added Sheet convolution/deconvolution for deblurring images from light-sheet microscopes. Check out experiments/light-sheet.ipynb.
   * Added higher-order Seidel coefficients for systems that have higher-order aberrations.
@@ -14,7 +23,6 @@
   * Now run deconvolution up to 15x faster!
   * Run batched ring convolution up to 100x faster!
 * [August 30th 2023] Introducing RDMPY v1!
-  * Official PyPI package to follow shortly.
   * Includes a new deep deblurring model, DeepRD (try it out with our pretrained models).
   * Please contact me if you have any issues or have ideas for the package!
 
@@ -29,7 +37,9 @@ This repository is still in early stages and will constantly be updated with new
 
 ## Installation
 
-Full installation should take no more than 10 minutes.
+Instructions for pip installation will be here soon!
+
+Full installation from scratch should take no more than 10 minutes.
 
 To get the code, clone this repo with ```git clone https://github.com/apsk14/rdmpy.git```.
 
@@ -38,21 +48,22 @@ Next, we need to manage all the necessary packages.
 The original code was developed in Python 3.8.5 with fairly standard packages (listed below). We believe that the code will run with an environment that already has most of these---just add on the missing ones. 
 
 Main packages:
-* numpy 1.20.2
-* pytorch 1.8.1
-* scipy 1.6.2
-* scikit-image 0.17.2
-* pillow 8.2.0
-* matplotlib 3.2.2
-* tqdm 4.65.0
-* kornia 0.5.3 
+* python 3.12.2
+* numpy 1.26.4
+* pytorch 2.4.1
+* scipy 1.13.1
+* scikit-image 0.24.0
+* pillow 10.4.0
+* matplotlib 3.9.2
+* tqdm 4.66.5
+* kornia 0.7.1
 * jupyter 1.0.0
 
 If you would like to install from scratch, please follow these steps using Anaconda:
-1) If you don't already have Anaconda or another package manager installed, we recommend [Miniconda](https://docs.anaconda.com/free/miniconda/miniconda-install/),
-2) Create a new environment ```conda create -n "rdm" python=3.8.5```
-3) Install pytorch first! This is important as it will make the rest smoother and will mean less total installs. ```conda install pytorch=1.8.1 pytorch-cuda=11.8 -c pytorch -c nvidia```. If you plan to only use cpu (not recommended), you can drop the pytorch-cuda part.
-4) Next, conda install scipy=1.6.2, scikit-image (this may be slow), matplotlib=3.2.2, tqdm, and jupyter.
+1) If you don't already have Anaconda or another package manager installed, we recommend [Miniconda](https://docs.anaconda.com/free/miniconda/miniconda-install/) or [Micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html). Micromamba can work better at resolving dependencies if you are having issues with Miniconda.
+2) Create a new environment ```conda create -n "rdm" python=3.12.2```
+3) Install pytorch first! This is important as it will make the rest smoother and will mean less total installs. ```conda install pytorch=2.4.1 pytorch-cuda=11.8 -c pytorch -c nvidia```. If you plan to only use cpu (not recommended), you can drop the pytorch-cuda part. If you will use GPU please select the cuda version according to your hardware.
+4) Next, conda install scipy=1.13.1, scikit-image (this may be slow), matplotlib=3.9.2, tqdm, and jupyter.
 5) Finally we will use conda-forge for kornia and install it as ```conda install conda-forge::kornia```. This step can also take some time.
 
 After that, we are ready to run some rdmpy! You can immediately try out demo.ipynb to see if everything works out. If you don't have enough GPU memory and/or the process is slow on your CPU, feel free to reduce the dim parameter in the beginning of the notebook.
