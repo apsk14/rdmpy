@@ -14,6 +14,7 @@ dirname = str(pathlib.Path(__file__).parent.absolute())
 def ring_deconvolve(
     image,
     psf_roft,
+    patch_size=0,
     iters=150,
     lr=5e-2,
     tv_reg=1e-10,
@@ -39,6 +40,9 @@ def ring_deconvolve(
     psf_roft : torch.Tensor
         The stack of PSFs to deconvolve the image with. The PSFs should be in the Rotational Fourier domain.
         Will be (L, M, L) where L is the number of PSFs/radii and M is the number of angles. See `rdmpy.calibrate.get_rdm_psfs` for details.
+
+    patch_size : int
+        The radial size of the rings to use for ring convolution. If 0, deconvolution is ring by ring.
 
     iters : int
         The number of iterations to run the optimization.
@@ -92,18 +96,23 @@ def ring_deconvolve(
     if len(psf_roft.shape) != 3:
         raise ValueError("Ring deconvolution needs a radial stack of PSF RoFTs")
 
+    if patch_size < 0 or patch_size > image.shape[0]:
+        raise AssertionError(
+            f"Patch size {patch_size} must be between 0 and {image.shape[0]}"
+        )
+
     # default optimization parameters
     def_opt_params = {
         "iters": iters,  # number of iterations to run the optimization
         "optimizer": "adam",  # which optimizer to use for the iterative optimization
         "lr": lr,  # learning rate of the optimizer
         "init": "measurement",  # initialization of the reconstruction before optimization
+        "patch_size": patch_size,  # size of the patches to use for ring convolution
         "crop": 0,  # How much to crop out when considering the optimization loss
         "tv_reg": tv_reg,  # Total variation regularization parameter
         "l2_reg": l2_reg,  # L2 norm regularization parameter
         "l1_reg": l1_reg,  # L1 norm regularization parameter
         "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
-        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
         "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
     }
     def_opt_params.update(opt_params)
@@ -127,7 +136,7 @@ def ring_deconvolve(
     recon = opt.image_recon(
         image.float(),
         psf_roft,
-        model="lri",
+        model="lri_patch" if patch_size > 0 else "lri",
         opt_params=def_opt_params,
         warm_start=warm_start,
         device=device,
@@ -227,7 +236,6 @@ def sheet_deconvolve(
         "l2_reg": l2_reg,  # L2 norm regularization parameter
         "l1_reg": l1_reg,  # L1 norm regularization parameter
         "plot_loss": False,  # Whether to plot the per-iteration loss during optimization
-        "fraction": False,  # If true, computes fractional forward passes for lower memory consumption
         "upper_projection": False,  # If true, projects the image to [0,1] to prevent hot pixels from lowering contrast
     }
     def_opt_params.update(opt_params)

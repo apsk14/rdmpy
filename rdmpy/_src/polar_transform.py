@@ -9,9 +9,175 @@ import numpy as np
 import torch
 import torch.nn.functional as fun
 
+import pdb
+
 dirname = str(pathlib.Path(__file__).parent.absolute())
 
 INTERP_TYPE = "bicubic"
+
+
+def polar_shift_alt(img, shifts, center=None):
+    if center is None:
+        center = [(img.shape[1] - 1) / 2.0, (img.shape[1] - 1) / 2.0]
+
+    initialAngle = np.pi / 4
+    finalAngle = 2 * np.pi + np.pi / 4
+
+    numRadii = img.shape[1]
+    numAngles = img.shape[0]
+
+    # finalRadius = np.sqrt(2) * (numRadii / 2)
+    # initialRadius = 0.0
+
+    # Step 1: Generate polar sampling grid
+    # theta = torch.linspace(initialAngle, finalAngle, steps=numAngles, device=img.device)
+    # radii = torch.linspace(
+    #     initialRadius, finalRadius, steps=numRadii, device=img.device
+    # )
+
+    radii = np.sqrt(2) * (
+        torch.linspace(
+            torch.tensor(0.0),
+            ((img.shape[-2] - 1) / torch.tensor(2.0)),
+            numRadii,
+            device=img.device,
+        )
+        + 0.5
+    )
+
+    theta = torch.linspace(initialAngle, finalAngle, numAngles, device=img.device)
+    r, theta = torch.meshgrid(radii, theta, indexing="xy")
+
+    xCartesian, yCartesian = getCartesianPointsTorch(r, theta, center)
+
+    xCartesian = xCartesian - shifts[0] * 4.0
+    yCartesian = yCartesian - shifts[0] * 4.0
+
+    scaleRadius = img.shape[1] / (radii[-1] - radii[0])
+    scaleAngle = img.shape[0] / (finalAngle - initialAngle)
+
+    r_new, theta_new = getPolarPointsTorch(xCartesian, yCartesian, center)
+
+    # Offset the radius by the initial source radius
+    r = r_new - radii[0]
+
+    # Offset the theta angle by the initial source angle
+    # The theta values may go past 2pi, so they are modulo 2pi.
+    # Note: This assumes initial source angle is positive
+    theta = torch.remainder(theta_new - initialAngle + 2 * np.pi, 2 * np.pi)
+
+    # Scale the radius using scale factor
+    r = r * scaleRadius
+
+    # Scale the angle from radians to pixels using scale factor
+    theta = theta * scaleAngle
+
+    pad = 10
+
+    # Pad image by 3 pixels and then offset all of the desired coordinates by 3
+    img = fun.pad(img[None, :, :], (pad, pad, pad, pad), "replicate").squeeze()
+    r += pad
+    theta += pad
+
+    gr = 2.0 * (r / (img.shape[-1] - 1)) - 1.0
+    gtheta = 2.0 * (theta / (img.shape[-2] - 1)) - 1.0
+    desiredCoords = torch.stack((gr, gtheta), 2)
+
+    cartImage = fun.grid_sample(
+        img[None, None, :, :].float(),
+        desiredCoords[None, :, :, :].float(),
+        padding_mode="zeros",
+        mode="bilinear",
+        align_corners=True,
+    )
+
+    return cartImage.squeeze()
+
+
+def polar_shift(
+    polar_img,
+    shifts,
+    center=None,
+    finalRadius=None,
+    initialAngle=np.pi / 4,
+    finalAngle=2 * np.pi + np.pi / 4,
+):
+    """
+    Shift a polar image by a Cartesian (x, y) offset, internally computing the polar grid.
+
+    Parameters:
+        polar_img : (A, R) torch.Tensor — Input polar image
+        shift_x, shift_y : float — Cartesian shift to simulate (pixels)
+        center : (x, y) tuple — Cartesian center of the original image
+        finalRadius : float — Maximum radius used in polar transform
+        initialAngle, finalAngle : float — Angle range for polar image (radians)
+
+    Returns:
+        shifted_polar : (A, R) torch.Tensor — Shifted polar image
+    """
+
+    device = polar_img.device
+    A, R = polar_img.shape
+    N = shifts.shape[0]
+
+    center = [(R - 1) / 2.0, (R - 1) / 2.0] if center is None else center
+    finalRadius = np.sqrt(2) * (R / 2)
+    initialRadius = 0.0
+
+    # Step 1: Generate polar sampling grid
+    theta = torch.linspace(initialAngle, finalAngle, steps=A, device=device)
+    radius = torch.linspace(initialRadius, finalRadius, steps=R, device=device)
+    radius_old, theta_grid = torch.meshgrid(radius, theta, indexing="xy")
+
+    # # Step 2: Convert polar → Cartesian
+    x = radius_old * torch.cos(theta_grid)  # + center[0]
+    y = radius_old * torch.sin(theta_grid)  # + center[1]
+
+    # # Step 3: Apply inverse Cartesian shift
+    x = x.unsqueeze(0) - shifts[:, None, None]
+    y = y.unsqueeze(0) - shifts[:, None, None]
+
+    # # Step 4: Convert back to polar
+    # # x = x - center[0]
+    # # y = y - center[1]
+    radius_grid = torch.sqrt(x**2 + y**2)
+    theta_grid = torch.atan2(y, x)
+
+    theta_grid = (
+        (theta_grid - initialAngle) % (2 * np.pi)
+    ) + initialAngle  # Ensure theta is in [0, 2π)
+
+    # Step 5: Normalize coordinates for grid_sample
+    theta_grid = (theta_grid - initialAngle) / (finalAngle - initialAngle) * 2 - 1
+    radius_grid = (radius_grid - initialRadius) / (finalRadius - initialRadius) * 2 - 1
+
+    # pad = 3
+    # polar_img = fun.pad(polar_img[None, :, :], (pad, pad, pad, pad), "replicate")
+    # theta_grid += pad
+    # radius_grid += pad
+
+    # radius_grid = 2.0 * (radius_grid / (polar_img.shape[2] - 1)) - 1.0
+    # theta_grid = 2.0 * (theta_grid / (polar_img.shape[1] - 1)) - 1.0
+
+    grid = torch.stack((radius_grid, theta_grid), dim=-1)  # shape (B, A, R, 2)
+
+    # Step 6: grid_sample from polar image
+    polar_img_batched = polar_img.unsqueeze(0)  # .unsqueeze(0)  # (1, 1, A, R)
+    shifted = fun.grid_sample(
+        polar_img_batched.repeat(N, 1, 1, 1),
+        grid,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )
+
+    # eps = 1e-8
+    # radius_grid = radius_grid.clamp(min=eps)
+    # jacobian_correction = (
+    #     (radius_old / radius_grid).unsqueeze(0).unsqueeze(0)
+    # )  # shape [1, 1, H, W]
+    # shifted = shifted * jacobian_correction
+    return shifted.squeeze()
 
 
 def getCartesianPoints(r, theta, center):
@@ -93,7 +259,7 @@ def img2polar(
     a_sampling=4,
 ):
     """
-    Converts cartesian image to polar image
+    Convert cartesian image to polar image
 
     Parameters
     ----------
@@ -118,6 +284,9 @@ def img2polar(
     border : str, optional
         How to handle borders. Options are 'constant', 'reflect', 'replicate',
         'circular', 'zeros'. Default is 'constant'.
+
+    a_sampling : int, optional
+        How many more times to sample angle than radius. Default is 4.
 
     Returns
     -------
@@ -207,7 +376,7 @@ def polar2img(
     Parameters
     ----------
     img : torch.Tensor
-        Polar mage to be converted. Should be (A,R) where A is angles and R is radii.
+        Polar image to be converted. Should be (A,R) where A is angles and R is radii.
 
     imageSize : tuple, optional
         Size of the image to be returned. If None, the image is assumed to be (R,R).
@@ -464,9 +633,9 @@ def batchimg2polar(
     theta = np.linspace(initialAngle, finalAngle, numAngles, endpoint=False)
 
     # convert to tensors to accelerate point sampling
-    theta, r = torch.meshgrid(
-        torch.tensor(theta, device=img.device),
+    r, theta = torch.meshgrid(
         torch.tensor(radii, device=img.device),
+        torch.tensor(theta, device=img.device),
         indexing="xy",
     )
     center = torch.tensor(center, device=img.device)
@@ -571,7 +740,7 @@ def batchpolar2img(
     # Get list of cartesian x and y coordinate and create a 2D create of the coordinates
     xs = torch.arange(0, imageSize[-1], device=img.device)
     ys = torch.arange(0, imageSize[-2], device=img.device)
-    x, y = torch.meshgrid(ys, xs, indexing="xy")
+    x, y = torch.meshgrid(xs, ys, indexing="xy")
 
     # Take cartesian grid and convert to polar coordinates
     r, theta = getPolarPointsTorch(x, y, center)

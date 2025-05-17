@@ -6,15 +6,137 @@ import torch.fft as fft
 import torch.nn.functional as F
 
 from tqdm import tqdm
+from torch.utils.checkpoint import checkpoint
 
-from ._src import polar_transform, seidel
+from ._src import polar_transform, psf_model
 
 
-def ring_convolve(
+def ring_convolve(obj, psf_data, patch_size=0, device=torch.device("cpu")):
+    """Return the ring convolution of an object with a stack of PSFs.
+
+    This function simulates the spatially-varying blur of a rotationally symmetric imaging system.
+    The PSFs are assumed to be in the Rotational Fourier domain.
+
+    Parameters
+    ----------
+    obj : np.ndarray or torch.Tensor
+        The image to be convolved with the PSF stack. Must be (N,N) where N is even.
+
+    psf_data : torch.Tensor
+        The stack of PSFs to convolve the image with. The PSFs should be in the Rotational Fourier domain.
+        Should be (L, M, L) where L is the number of PSFs/radii and M is the number of angles.
+
+    patch_size : int
+        The size of isoplanatic annuli. If 0, will compute ring by ring.
+
+    device : torch.device
+        The device to use for the computation.
+
+    Returns
+    -------
+    img : torch.Tensor
+        The ring convolution of the object with the PSF stack. Will be (N,N).
+    """
+
+    if not torch.is_tensor(obj):
+        obj = torch.tensor(obj).float()
+    obj = obj.to(device)
+    if not len(obj.shape) == 2 or obj.shape[0] != obj.shape[1]:
+        raise AssertionError(f"Object of shape {obj.shape} must be 2D square")
+
+    if patch_size < 0 or patch_size > obj.shape[0]:
+        raise AssertionError(
+            f"Patch size {patch_size} must be between 0 and {obj.shape[0]}"
+        )
+
+    if patch_size == 0:
+        return ring_convolve_full(obj, psf_data, device=device)
+    else:
+        return ring_convolve_patch(obj, psf_data, patch_size, device=device)
+
+
+def ring_convolve_patch(
+    obj,
+    psf_stack,
+    patch_size,
+    device=torch.device("cpu"),
+):
+
+    pad = obj.shape[0] // 2
+    overlap = patch_size // 4
+    num_rings = obj.shape[0]
+    num_patches = int(np.ceil(num_rings / patch_size))
+
+    if num_patches != psf_stack.shape[0]:
+        raise AssertionError(
+            f"Number of patches {num_patches} does not match number of PSFs {psf_stack.shape[0]}"
+        )
+
+    # Polar transform (tracked for gradient)
+    obj_polar = polar_transform.batchimg2polar(
+        obj[None, None, :, :], numRadii=num_rings
+    ).squeeze()
+
+    # Build masks outside autograd
+    with torch.no_grad():
+        masks = []
+        taper = (
+            torch.linspace(0.0, 1.0, overlap, device=device) if overlap > 0 else None
+        )
+        for i in range(num_patches):
+            m = torch.zeros_like(obj_polar, device=device)
+            start = i * patch_size
+            end = (i + 1) * patch_size
+            m[:, start:end] = 1
+            if overlap > 0:
+                if i > 0:
+                    m[:, start : start + overlap] = taper
+                if end + overlap < num_rings:
+                    m[:, end : end + overlap] = 1 - taper
+                elif end < num_rings:
+                    short_taper = torch.linspace(
+                        0.0, 1.0, num_rings - end, device=device
+                    )
+                    m[:, end:] = 1 - short_taper
+            masks.append(m)
+
+    # Forward patch function (wrapped for checkpointing)
+    def process_patch(masked_patch, psf_fft):
+        recon = polar_transform.batchpolar2img(
+            masked_patch[None, None, :, :], obj.shape
+        ).squeeze()
+        padded = F.pad(recon, (0, pad, 0, pad))
+        return psf_fft * fft.rfft2(padded)
+
+    # Accumulate result
+    result = torch.zeros(
+        [psf_stack.shape[1], psf_stack.shape[2] // 2],
+        device=device,
+        dtype=torch.complex64,
+    )
+    for i in range(num_patches):
+        # Masked polar patch (this part tracks gradients)
+        masked = obj_polar * masks[i]
+
+        # checkpointed computation to reduce memory use
+        result += checkpoint(
+            process_patch,
+            masked,
+            psf_stack[i, :, 0 : psf_stack.shape[-1] // 2]
+            + 1j * psf_stack[i, :, psf_stack.shape[-1] // 2 :],
+        )
+
+    result = fft.irfft2(result)
+
+    # Centering and crop
+    result = torch.roll(result, shifts=(-pad, -pad), dims=(-2, -1))
+    return result[:-pad, :-pad]
+
+
+def ring_convolve_full(
     obj,
     psf_roft,
     device=torch.device("cpu"),
-    verbose=False,
 ):
     """Return the ring convolution of an object with a stack of PSFs.
 
@@ -34,9 +156,6 @@ def ring_convolve(
     device : torch.device
         The device to use for the computation.
 
-    verbose : bool
-        Whether to display a progress bar.
-
     Returns
     -------
     img : torch.Tensor
@@ -47,40 +166,30 @@ def ring_convolve(
     This function assumes that the PSFs are in the Rotational Fourier domain.
     """
 
-    if not torch.is_tensor(obj):
-        obj = torch.tensor(obj).float()
-    if obj.device is not device:
-        obj = obj.to(device)
-    if not len(obj.shape) == 2 and obj.shape[0] == obj.shape[1]:
-        raise AssertionError(f"Object of shape {obj.shape} must be 2d square image")
-
     # infer info from the PSF roft
     num_radii = psf_roft.shape[0]
 
     # get object RoFT
-    obj_polar = polar_transform.img2polar(obj, numRadii=num_radii)
+    obj_polar = polar_transform.img2polar(obj, numRadii=obj.shape[0])
 
     r_list = np.sqrt(2) * (
-        np.linspace(0, (obj.shape[0] / 2), num_radii, endpoint=False, retstep=False)
+        np.linspace(0, (obj.shape[0] / 2), obj.shape[0], endpoint=False, retstep=False)
         + 0.5
     )
 
     dr = r_list[1] - r_list[0]
-    dtheta = 2 * np.pi / obj_polar.shape[0]
-
+    dtheta = 2 * np.pi / psf_roft.shape[1]
     obj_fft = fft.rfft(obj_polar, dim=0)
 
     # create blank image RoFT which will be subsequently filled in
     img_polar_fft = torch.zeros_like(obj_fft, dtype=torch.complex64, device=device)
 
-    radii = tqdm(enumerate(r_list)) if verbose else (enumerate(r_list))
-    for index, r in radii:
+    for index in torch.arange(num_radii):
+        integration_area = r_list[index] * dr * dtheta
         curr_psf_polar_fft = (
             psf_roft[index, 0 : psf_roft.shape[1] // 2, :]
             + 1j * psf_roft[index, psf_roft.shape[1] // 2 :, :]
         )
-        # curr_psf_polar_fft = psf_roft[index, :, :]
-        integration_area = r * dr * dtheta
         img_polar_fft += integration_area * (
             obj_fft[:, index][:, None] * curr_psf_polar_fft
         )
@@ -241,6 +350,11 @@ def convolve(obj, psf):
     Here we use the real Fourier transform for efficiency. Thus the object and PSF must both be real-valued.
     """
 
+    if not torch.is_tensor(obj):
+        obj = torch.tensor(obj).float()
+    if not len(obj.shape) == 2 and obj.shape[0] == obj.shape[1]:
+        raise AssertionError(f"Object of shape {obj.shape} must be 2d square image")
+
     extent = obj.shape[0]
     padded_obj = F.pad(obj, (0, extent, 0, extent))
     padded_psf = F.pad(psf, (0, extent, 0, extent))
@@ -270,7 +384,7 @@ def full(obj, seidel_coeffs, sys_params={}, verbose=False, device=torch.device("
         The Seidel aberration coefficients to use for the PSF stack. Must be (6,1).
 
     sys_params : dict,
-        The system parameters to use PSF generation, see `seidel.py` for details
+        The system parameters to use PSF generation, see `psf_model.py` for details
 
     verbose : bool,
         Whether to display a progress bar.
@@ -282,6 +396,10 @@ def full(obj, seidel_coeffs, sys_params={}, verbose=False, device=torch.device("
     -------
     img : torch.Tensor
         The full blur of the object with the PSF stack. Will be (N,N).
+
+    Notes
+    -----
+    This function is extremely slow and is primarily for comparison purposes.
     """
 
     if not torch.is_tensor(obj):
@@ -315,7 +433,7 @@ def full(obj, seidel_coeffs, sys_params={}, verbose=False, device=torch.device("
     for i in iterable_outer_loop:
         for j in np.arange(obj_shape[1]):
             if obj[i, j] != 0:
-                psf = seidel.compute_psfs(
+                psf = psf_model.compute_rdm_psfs(
                     seidel_coeffs,
                     [(x_grid[j], y_grid[i])],
                     sys_params=def_sys_params,

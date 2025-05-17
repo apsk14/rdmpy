@@ -5,13 +5,16 @@ import torch
 import torch.fft as fft
 import matplotlib as mpl
 from skimage.feature import corner_peaks
+from skimage.morphology import erosion, disk
+import torch.nn.functional as F
 
 import gc
 from tqdm import tqdm
 
-from ._src import opt, seidel, util
+from ._src import opt, psf_model, util, polar_transform
 import pdb
 
+import matplotlib.pyplot as plt
 
 mpl.rcParams["figure.dpi"] = 300
 
@@ -23,6 +26,7 @@ def calibrate_rdm(
     sys_center=None,
     get_psfs=True,
     num_seidel=4,
+    patch_size=0,
     higher_order=False,
     fit_params={},
     sys_params={},
@@ -40,7 +44,7 @@ def calibrate_rdm(
 
     Parameters
     ----------
-    calib_img : torch.Tensor
+    calib_img : np.ndarray
         Calibration image, ideally an image of sparse, randomly-placed point sources. Can be any size (M, N) but will be cropped
         to (dim, dim) and centered to the center of the image by default or sys_center if specified.
 
@@ -62,6 +66,9 @@ def calibrate_rdm(
     num_seidel : int
         Number of Seidel coefficients to fit. Default is 4 (excludes distortion and defocus by default as they are less common)
 
+    patch_size : int
+        Size of the isoplanatic annuli. If 0, no patching will be done. If > 0, the PSFs will be computed in patches.
+
     fit_params : dict
         Parameters for the seidel fitting procedure.
 
@@ -70,6 +77,7 @@ def calibrate_rdm(
 
     show_psfs : bool
         Whether to show the PSFs estimated by the Seidel fit.
+
 
     downsample : int
         Factor by which to downsample the PSFs after fitting. Useful for fitting to higher resolution PSFs but then using
@@ -133,7 +141,7 @@ def calibrate_rdm(
     def_fit_params.update(fit_params)
 
     # seperating out individual PSFs from the calibration image
-    psf_locations, calib_img = util.get_calib_info(calib_img, dim, def_fit_params)
+    psf_locations, calib_img = get_calib_info(calib_img, dim, def_fit_params)
 
     if model == "gaussian":
         # get psf location closest to the center
@@ -156,17 +164,18 @@ def calibrate_rdm(
             device=device,
         )
         if downsample < 1:
-            center_psf = seidel.make_gaussian(
+            center_psf = psf_model.make_gaussian(
                 [var, var], int(dim // downsample), def_sys_params["L"], device=device
             )
 
         return center_psf / center_psf.sum()
 
     # seidel fitting
+
     if verbose:
         print("fitting seidel coefficients...")
     coeffs = opt.estimate_coeffs(
-        calib_img,
+        torch.tensor(calib_img, device=device),
         psf_list=psf_locations,
         sys_params=def_sys_params,
         fit_params=def_fit_params,
@@ -187,6 +196,7 @@ def calibrate_rdm(
             seidel_coeffs,
             dim,
             model,
+            patch_size=patch_size,
             sys_params=def_sys_params,
             downsample=downsample,
             verbose=verbose,
@@ -205,6 +215,7 @@ def get_rdm_psfs(
     seidel_coeffs,
     dim,
     model,
+    patch_size=0,
     sys_params={},
     downsample=1,
     higher_order=None,
@@ -227,6 +238,9 @@ def get_rdm_psfs(
     model : str
         Either 'lsi' or 'lri' for the type of PSF model to use. LSI model will return a single PSF at the center of the image,
         while LRI model will return a stack of PSF RoFTs.
+
+    patch_size : int
+        Size of the isoplanatic annuli. If 0, no patching will be done. If > 0, the PSFs will be computed in patches.
 
     sys_params : dict
         Parameters for the optical system.
@@ -261,6 +275,8 @@ def get_rdm_psfs(
     def_sys_params["L"] = ((dim) * (def_sys_params["lamb"])) / (4 * (radius_over_z))
     def_sys_params.update(sys_params)
 
+    patch_based = patch_size > 0 and patch_size <= dim // abs(downsample)
+
     if not torch.is_tensor(seidel_coeffs):
         seidel_coeffs = torch.tensor(seidel_coeffs).to(device)
 
@@ -270,6 +286,10 @@ def get_rdm_psfs(
         rs = np.linspace(
             0, (dim / 2), int(dim // abs(downsample)), endpoint=False, retstep=False
         )
+
+        if patch_based:
+            rs = rs[::patch_size]
+
         point_list = [(r, -r) for r in rs]  # radial line of PSFs
     else:
         raise (NotImplementedError)
@@ -277,18 +297,19 @@ def get_rdm_psfs(
     if verbose:
         print("rendering PSFs...")
 
-    if model == "lsi":
-        buffer = 0
-    elif model == "lri":
+    if model == "lri":
         buffer = 2
+    else:
+        buffer = 0
 
-    psf_data = seidel.compute_psfs(
+    psf_data = psf_model.compute_rdm_psfs(
         seidel_coeffs,
         point_list,
         sys_params=def_sys_params,
-        polar=(model == "lri"),
+        polar=(model == "lri" and not patch_based),
         stack=True,
         buffer=buffer,
+        shift=not patch_based,
         downsample=downsample,
         higher_order=higher_order,
         verbose=verbose,
@@ -300,15 +321,109 @@ def get_rdm_psfs(
         psf_data = psf_data[0].to(device)
     if model == "lri":
         # here compute the RoFT of each PSF in-place (torch.rfft is memory inefficient)
-        for i in range(psf_data.shape[0]):
-            temp_rft = fft.rfft(psf_data[i, 0:-2, :], dim=0)
-            psf_data[i, 0 : psf_data.shape[1] // 2, :] = torch.real(temp_rft)
-            psf_data[i, psf_data.shape[1] // 2 :, :] = torch.imag(temp_rft)
 
-        del temp_rft
+        if patch_based:
+            pad = dim // 2
+            psf_data = F.pad(psf_data, (0, pad, 0, pad))
+            for i in range(psf_data.shape[0]):
+                temp_rft = fft.rfft2(psf_data[i, :, 0:-buffer])
+                psf_data[i, :, 0 : psf_data.shape[-1] // 2] = torch.real(temp_rft)
+                psf_data[i, :, psf_data.shape[-1] // 2 :] = torch.imag(temp_rft)
+        else:
+            for i in range(psf_data.shape[0]):
+                temp_rft = fft.rfft(psf_data[i, 0:-2, :], dim=0)
+                psf_data[i, 0 : psf_data.shape[1] // 2, :] = torch.real(temp_rft)
+                psf_data[i, psf_data.shape[1] // 2 :, :] = torch.imag(temp_rft)
+
+            del temp_rft
         gc.collect()
 
     return psf_data
+
+
+def get_calib_info(calib_image, dim, fit_params):
+    """
+    Localizes PSFs in calibration image.
+
+    Parameters
+    ----------
+    calib_image : np.ndarray
+        Calibration image.
+
+    dim : tuple
+        Dimension of desired PSFs. Should be square (N,N).
+
+    fit_params : dict
+        Dictionary of parameters for calibration.
+
+    Returns
+    -------
+    coord_list : list
+        List of coordinates of PSFs in calibration image (xy) format.
+
+    calib_image : np.ndarray
+        Cropped calibration image.
+
+    """
+
+    psf = calib_image.copy()
+    psf[psf < 0] = 0
+    psf[psf < np.quantile(psf, 0.9)] = 0
+    if fit_params["disk"] <= 0:
+        raw_coord = corner_peaks(
+            psf,
+            min_distance=fit_params["min_distance"],
+            indices=True,
+            threshold_rel=fit_params["threshold"],
+        )
+    else:
+        raw_coord = corner_peaks(
+            erosion(psf, disk(fit_params["disk"])),
+            min_distance=fit_params["min_distance"],
+            indices=True,
+            threshold_rel=fit_params["threshold"],
+        )
+    distances = np.sqrt(np.sum(np.square(raw_coord - fit_params["sys_center"]), axis=1))
+    if fit_params["centered_psf"]:
+        center = raw_coord[np.argmin(distances), :]
+        print(center)
+    else:
+        center = fit_params["sys_center"].copy()
+    if dim // 2 > center[0]:
+        PAD = dim // 2 - center[0]
+        calib_image = np.pad(calib_image, ((PAD, 0), (0, 0)))
+        center[0] += PAD
+    if dim // 2 > center[1]:
+        PAD = dim // 2 - center[1]
+        calib_image = np.pad(calib_image, ((0, 0), (PAD, 0)))
+        center[1] += PAD
+    if dim // 2 + center[0] > calib_image.shape[0]:
+        PAD = dim // 2 + center[0] - calib_image.shape[0]
+        calib_image = np.pad(calib_image, ((0, PAD), (0, 0)))
+        center[0] -= PAD
+    if dim // 2 + center[1] > calib_image.shape[1]:
+        PAD = dim // 2 + center[1] - calib_image.shape[1]
+        calib_image = np.pad(calib_image, ((0, 0), (0, PAD)))
+        center[1] -= PAD
+
+    calib_image = calib_image[
+        center[0] - dim // 2 : center[0] + dim // 2,
+        center[1] - dim // 2 : center[1] + dim // 2,
+    ]
+
+    coord_list = []
+    for i in range(raw_coord.shape[0]):
+        if (
+            np.abs(raw_coord[i, 1] - center[1]) < dim // 2
+            and np.abs(center[0] - raw_coord[i, 0]) < dim // 2
+        ):
+            coord_list += [(raw_coord[i, 1] - center[1], center[0] - raw_coord[i, 0])]
+
+    calib_image[calib_image < 0] = 0
+    calib_image[calib_image < np.quantile(calib_image, 0.9)] = 0
+    calib_image = (calib_image / calib_image.sum()) * len(coord_list)
+
+    return coord_list, calib_image
 
 
 def isolate_psf(psf_stack, psf_loc, psf_dim):
@@ -561,6 +676,7 @@ def calibrate_sdm(
         return psf_cube, psf_locs
 
     if model == "gl":
+        psf_stack = torch.tensor(psf_stack, device=device).float()
         print("Fitting GL model...")
         # default parameters for the gibson-lanni model based on the light-sheet system from the paper.
         def_gl_params = {
@@ -598,7 +714,7 @@ def calibrate_sdm(
 
         def_gl_params.update(gl_params)
 
-        waist, spread, gl_params = opt.fit_sheet(
+        waist, spread, gl_params = opt.fit_gl_model(
             psf_stack,
             psf_locs,
             psf_xy_dim,
@@ -606,7 +722,6 @@ def calibrate_sdm(
             gl_opt=gl_opt,
             iters=iters,
             lr=lr,
-            grid_search=False,
             verbose=verbose,
             device=device,
         )
@@ -614,7 +729,7 @@ def calibrate_sdm(
         raise (NotImplementedError)
 
     if get_psfs:
-        psf_cube = get_ls_psfs(
+        psf_cube = get_sdm_psfs(
             waist=waist,
             spread=spread,
             psf_xy_dim=psf_xy_dim,
@@ -629,7 +744,7 @@ def calibrate_sdm(
     return waist, spread, gl_params
 
 
-def get_ls_psfs(
+def get_sdm_psfs(
     waist,
     spread,
     ls_dim,
@@ -712,7 +827,7 @@ def get_ls_psfs(
 
     def_gl_params.update(gl_params)
 
-    psf_cube_list = seidel.compute_ls_psfs(
+    psf_cube_list = psf_model.compute_sdm_psfs(
         waist,
         spread,
         def_gl_params,

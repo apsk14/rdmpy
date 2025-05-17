@@ -8,6 +8,7 @@ import gc
 import numpy as np
 import torch
 import torch.fft as fft
+from torch.utils.checkpoint import checkpoint
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
@@ -15,12 +16,8 @@ from tqdm import tqdm
 
 from kornia.filters.sobel import spatial_gradient
 
-from . import util, seidel, polar_transform
+from . import psf_model, util
 from .. import blur
-import gc
-from torch.utils.checkpoint import checkpoint
-from torch.cuda.amp import autocast
-from scipy.ndimage import gaussian_filter
 
 mpl.rcParams["figure.dpi"] = 500
 
@@ -43,7 +40,7 @@ def estimate_coeffs(
 
     Parameters
     ----------
-    calib_image : np.ndarray
+    calib_image : torch.Tensor
         Calibration image of randomly scattered PSFs.
 
     psf_list : list of tuples
@@ -75,7 +72,6 @@ def estimate_coeffs(
 
     """
 
-    psfs_gt = torch.tensor(calib_image, device=device).float()
     if fit_params["seidel_init"] is not None:
         coeffs = torch.tensor(fit_params["seidel_init"], device=device)
     else:
@@ -113,7 +109,7 @@ def estimate_coeffs(
     for iter in iterations:
         # forward pass
         if coeffs.shape[0] < 6:
-            psfs_estimate = seidel.compute_psfs(
+            psfs_estimate = psf_model.compute_rdm_psfs(
                 torch.cat((coeffs, torch.zeros(6 - coeffs.shape[0], 1, device=device))),
                 desired_list=psf_list,
                 stack=False,
@@ -122,7 +118,7 @@ def estimate_coeffs(
                 device=coeffs.device,
             )
         else:
-            psfs_estimate = seidel.compute_psfs(
+            psfs_estimate = psf_model.compute_rdm_psfs(
                 coeffs,
                 desired_list=psf_list,
                 stack=False,
@@ -132,7 +128,7 @@ def estimate_coeffs(
             )
         # loss
         loss = l1_loss_fn(
-            util.normalize(sum(psfs_estimate).float()), util.normalize(psfs_gt)
+            util.normalize(sum(psfs_estimate).float()), util.normalize(calib_image)
         ) + fit_params["reg"] * l2_loss_fn(coeffs, -coeffs)
 
         if fit_params["plot_loss"]:
@@ -156,7 +152,7 @@ def estimate_coeffs(
         psf_est = sum(psfs_estimate) / (len(psfs_estimate))
         psf_est_mask = psf_est.detach().cpu().clone()
         psf_est_mask[psf_est_mask > np.quantile(psf_est_mask, 0.99)] = 1
-        psfs_gt = psfs_gt.detach().cpu() * psf_est_mask
+        psfs_gt = calib_image.detach().cpu() * psf_est_mask
 
         plt.subplot(1, 2, 2)
         plt.tight_layout()
@@ -193,7 +189,7 @@ def estimate_coeffs(
     return final_coeffs
 
 
-def fit_sheet(
+def fit_gl_model(
     psf_stack,
     psf_locs,
     psf_xy_dim,
@@ -201,17 +197,57 @@ def fit_sheet(
     gl_opt=[],
     iters=100,
     lr=5e-2,
-    grid_search=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
+    """
+    Fit the parameters of the light-sheet Gibson-lanni PSF model to a stack of PSFs.
+
+    Parameters
+    ----------
+    psf_stack : torch.Tensor
+        Stack of PSFs to fit the model to.
+
+    psf_locs : list of tuples
+        List of PSF locations in the calibration image. Expecting xy coordinates,
+        not rowcol coordinates.
+
+    psf_xy_dim : int
+        Size of the PSF in the xy dimensions.
+
+    gl_params : dict
+        Dictionary of parameters for the Gibson-Lanni PSF model.
+
+    gl_opt : list of str
+        List of which gl_params to optimize.
+
+    iters : int
+        Number of iterations to run the optimization for.
+
+    lr : float
+        Learning rate for the optimization.
+
+    verbose : bool
+        Whether to print out progress. The default is True.
+
+    device : torch.device
+        Device to run the optimization on. The default is torch.device("cpu").
+
+    Returns
+    -------
+    waist : torch.Tensor
+        Waist of the PSF.
+
+    spread : torch.Tensor
+        Spread of the PSF.
+
+    gl_params : dict
+        Dictionary of parameters for the Gibson-Lanni PSF model.
+    """
 
     torch.autograd.set_detect_anomaly(True)
-    psfs_gt = torch.tensor(psf_stack, device=device).float()
 
     l2_loss_fn = torch.nn.MSELoss()
-
-    l1_loss_fn = torch.nn.L1Loss()
 
     best_waist = 0.1
     best_spread = 1.0
@@ -237,9 +273,9 @@ def fit_sheet(
         loss = 0
 
         for loc in psf_locs:
-            lateral_pos = (loc[0] - psfs_gt.shape[0] // 2) * gl_params["dx"]
+            lateral_pos = (loc[0] - psf_stack.shape[0] // 2) * gl_params["dx"]
 
-            candidate_psf = seidel.compute_GL_psf(
+            candidate_psf = psf_model.compute_GL_psf(
                 lateral_pos=lateral_pos,
                 waist=waist,
                 spread=spread,
@@ -264,42 +300,42 @@ def fit_sheet(
             if loc[0] < psf_xy_dim // 2:
                 left_crop = psf_xy_dim // 2 - loc[0]
                 candidate_psf = candidate_psf[left_crop:, :, :]
-            if loc[0] > psfs_gt.shape[0] - psf_xy_dim // 2:
-                right_crop = loc[0] - psfs_gt.shape[0] + psf_xy_dim // 2
+            if loc[0] > psf_stack.shape[0] - psf_xy_dim // 2:
+                right_crop = loc[0] - psf_stack.shape[0] + psf_xy_dim // 2
                 candidate_psf = candidate_psf[:-right_crop, :, :]
             if loc[1] < psf_xy_dim // 2:
                 left_crop = psf_xy_dim // 2 - loc[1]
                 candidate_psf = candidate_psf[:, left_crop:, :]
-            if loc[1] > psfs_gt.shape[1] - psf_xy_dim // 2:
-                right_crop = loc[1] - psfs_gt.shape[1] + psf_xy_dim // 2
+            if loc[1] > psf_stack.shape[1] - psf_xy_dim // 2:
+                right_crop = loc[1] - psf_stack.shape[1] + psf_xy_dim // 2
                 candidate_psf = candidate_psf[:, :-right_crop, :]
 
             if loc[2] < psf_dim_z // 2:
                 left_crop = psf_dim_z // 2 - loc[2]
                 candidate_psf = candidate_psf[:, :, left_crop:]
-            if loc[2] > psfs_gt.shape[2] - psf_dim_z / 2:
+            if loc[2] > psf_stack.shape[2] - psf_dim_z / 2:
                 right_crop = (
-                    loc[2] - psfs_gt.shape[2] + psf_dim_z // 2 + int(psf_dim_z % 2)
+                    loc[2] - psf_stack.shape[2] + psf_dim_z // 2 + int(psf_dim_z % 2)
                 )
                 candidate_psf = candidate_psf[:, :, :-right_crop]
 
-            comparison_psf = psfs_gt[
+            comparison_psf = psf_stack[
                 (loc[0] - psf_xy_dim // 2)
                 * int(loc[0] >= psf_xy_dim // 2) : (
                     (loc[0] + psf_xy_dim // 2)
-                    if loc[0] <= psfs_gt.shape[0] - psf_xy_dim // 2
+                    if loc[0] <= psf_stack.shape[0] - psf_xy_dim // 2
                     else None
                 ),
                 (loc[1] - psf_xy_dim // 2)
                 * int(loc[1] >= psf_xy_dim // 2) : (
                     (loc[1] + psf_xy_dim // 2)
-                    if loc[1] <= psfs_gt.shape[1] - psf_xy_dim // 2
+                    if loc[1] <= psf_stack.shape[1] - psf_xy_dim // 2
                     else None
                 ),
                 (loc[2] - psf_dim_z // 2)
                 * int(loc[2] >= psf_dim_z // 2) : (
                     (loc[2] + psf_dim_z // 2 + int(psf_dim_z % 2))
-                    if loc[2] < psfs_gt.shape[2] - psf_dim_z // 2
+                    if loc[2] < psf_stack.shape[2] - psf_dim_z // 2
                     else None
                 ),
             ]
@@ -319,11 +355,13 @@ def fit_sheet(
         if spread.data < 1e-6:
             spread.data[0] = 1e-6
 
-    print("waist: ", waist.item())
-    print("spread: ", spread.item())
+    if verbose:
+        print("waist: ", waist.item())
+        print("spread: ", spread.item())
     for key in gl_opt:
         value = gl_params[key]
-        print(key, ": ", value.item())
+        if verbose:
+            print(key, ": ", value.item())
         gl_params[key] = value.detach()
 
     return (
@@ -342,28 +380,21 @@ def volume_recon(
     device=torch.device("cpu"),
 ):
     """
-    Deblurs an image using either deconvolution or ring deconvolution
+    Deblur a volume using either deconvolution or ring deconvolution
 
     Parameters
     ----------
     measurement : torch.Tensor
-        Measurement to be deblurred. Should be (N,N).
+        Measurement to be deblurred.
 
     psf_data : torch.Tensor
-        Stack of rotationatal Fourier transforms of the PSFs if model is 'lri',
-        otherwise single center PSF if model is 'lsi'.
-
-    model : str
-        Either 'lri' or 'lsi'.
+        Stack of 3D PSFs to be used for deblurring.
 
     opt_params : dict
         Dictionary of optimization parameters.
 
     warm_start : torch.Tensor
         Warm start for the optimization. The default is None.
-
-    use_batch_conv : bool
-        Whether to use batched lri convolution. The default is False.
 
     verbose : bool
         Whether to print out progress. The default is True.
@@ -374,8 +405,7 @@ def volume_recon(
     Returns
     -------
     estimate : torch.Tensor
-        Deblurred image. Will be (N,N).
-
+        Deblurred volume.
     """
 
     dim = measurement.shape
@@ -435,6 +465,9 @@ def volume_recon(
             + opt_params["l1_reg"] * torch.sum(torch.abs(estimate))
         )
 
+        if opt_params["plot_loss"]:
+            losses += [loss.detach().cpu()]
+
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -445,6 +478,11 @@ def volume_recon(
             # upper proejction
             if opt_params["upper_projection"]:
                 estimate.data[estimate.data > 1] = 1
+
+    if opt_params["plot_loss"]:
+        plt.figure()
+        plt.plot(range(len(losses)), losses)
+        plt.show()
 
     final = util.normalize(estimate.detach().cpu().float())
 
@@ -460,12 +498,11 @@ def image_recon(
     model,
     opt_params,
     warm_start=None,
-    use_batch_conv=False,
     verbose=True,
     device=torch.device("cpu"),
 ):
     """
-    Deblurs an image using either deconvolution or ring deconvolution
+    Deblur an image using either deconvolution or ring deconvolution.
 
     Parameters
     ----------
@@ -485,9 +522,6 @@ def image_recon(
     warm_start : torch.Tensor
         Warm start for the optimization. The default is None.
 
-    use_batch_conv : bool
-        Whether to use batched lri convolution. The default is False.
-
     verbose : bool
         Whether to print out progress. The default is True.
 
@@ -498,9 +532,10 @@ def image_recon(
     -------
     estimate : torch.Tensor
         Deblurred image. Will be (N,N).
-
     """
+
     dim = measurement.shape
+    torch.autograd.set_detect_anomaly(True)
 
     if warm_start is not None:
         estimate = warm_start.clone()
@@ -524,7 +559,6 @@ def image_recon(
         raise NotImplementedError
 
     loss_fn = torch.nn.MSELoss()
-    # loss_fn = torch.nn.L1Loss()
 
     losses = []
 
@@ -549,76 +583,21 @@ def image_recon(
         # forward pass and loss
         if model == "lsi":
             measurement_guess = blur.convolve(estimate, psf_data)
-        elif use_batch_conv:
-            measurement_guess = blur.batch_ring_convolve(
-                estimate[None, None, ...], psf_data, device=device
-            )[0, 0]
+        elif model == "lri":
+            measurement_guess = blur.ring_convolve(
+                estimate,
+                psf_data,
+                device=device,
+            )
+        elif model == "lri_patch":
+            measurement_guess = blur.ring_convolve_patch(
+                estimate,
+                psf_data,
+                patch_size=opt_params["patch_size"],
+                device=device,
+            )
         else:
-            # with autocast():
-            if opt_params["fraction"] is True:
-                measurement_guess_1 = checkpoint(
-                    (
-                        lambda x, y: blur.ring_convolve_fractional(
-                            x,
-                            y,
-                            fraction=[0, opt_params["fraction"]],
-                            device=x.device,
-                        )
-                    ),
-                    estimate,
-                    psf_data,
-                )
-                measurement_guess_2 = checkpoint(
-                    (
-                        lambda x, y: blur.ring_convolve_fractional(
-                            x,
-                            y,
-                            fraction=[1, opt_params["fraction"]],
-                            device=x.device,
-                        )
-                    ),
-                    estimate,
-                    psf_data,
-                )
-                measurement_guess_3 = checkpoint(
-                    (
-                        lambda x, y: blur.ring_convolve_fractional(
-                            x,
-                            y,
-                            fraction=[2, opt_params["fraction"]],
-                            device=x.device,
-                        )
-                    ),
-                    estimate,
-                    psf_data,
-                )
-                measurement_guess_4 = checkpoint(
-                    (
-                        lambda x, y: blur.ring_convolve_fractional(
-                            x,
-                            y,
-                            fraction=[3, opt_params["fraction"]],
-                            device=x.device,
-                        )
-                    ),
-                    estimate,
-                    psf_data,
-                )
-                measurement_guess = polar_transform.polar2img(
-                    fft.irfft(
-                        measurement_guess_1
-                        + measurement_guess_2
-                        + measurement_guess_3
-                        + measurement_guess_4,
-                        dim=0,
-                    ),
-                    estimate.shape,
-                )
-
-            else:
-                measurement_guess = blur.ring_convolve(
-                    estimate, psf_data, device=device, verbose=False
-                )
+            raise NotImplementedError
 
         loss = (
             loss_fn(
@@ -656,138 +635,16 @@ def image_recon(
     return final
 
 
-# TODO: under development
-# def image_recon_batch(
-#     measurement,
-#     seidel_coeffs,
-#     opt_params,
-#     sys_params,
-#     warm_start=None,
-#     verbose=True,
-#     device=torch.device("cpu"),
-# ):
-#     """
-#     Deblurs an image using either deconvolution or ring deconvolution
-
-#     Parameters
-#     ----------
-#     measurement : torch.Tensor
-#         Measurement to be deblurred. Should be (N,N).
-
-#     psf_data : torch.Tensor
-#         Stack of rotationatal Fourier transforms of the PSFs if model is 'lri',
-#         otherwise single center PSF if model is 'lsi'.
-
-#     opt_params : dict
-#         Dictionary of optimization parameters.
-
-#     warm_start : torch.Tensor
-#         Warm start for the optimization. The default is None.
-
-#     verbose : bool
-#         Whether to print out progress. The default is True.
-
-#     device : torch.device
-#         Device to run the reconstruction on. The default is torch.device("cpu").
-
-#     Returns
-#     -------
-#     estimate : torch.Tensor
-#         Deblurred image. Will be (N,N).
-
-#     """
-#     dim = measurement.shape
-
-#     if warm_start is not None:
-#         estimate = warm_start.clone()
-#     else:
-#         if opt_params["init"] == "measurement":
-#             estimate = measurement.clone()
-#         elif opt_params["init"] == "zero":
-#             estimate = torch.zeros(dim, device=device)
-#         elif opt_params["init"] == "noise":
-#             estimate = torch.randn(dim, device=device)
-#         else:
-#             raise NotImplementedError
-
-#     estimate.requires_grad = True
-
-#     if opt_params["optimizer"] == "adam":
-#         optimizer = torch.optim.Adam([estimate], lr=opt_params["lr"])
-#     elif opt_params["optimizer"] == "sgd":
-#         optimizer = torch.optim.SGD([estimate], lr=opt_params["lr"])
-#     else:
-#         raise NotImplementedError
-
-#     loss_fn = torch.nn.MSELoss()
-#     crop = opt_params["crop"]
-
-#     losses = []
-
-#     if opt_params["plot_loss"]:
-#         losses = []
-
-#     iterations = (
-#         tqdm(range(opt_params["iters"])) if verbose else range(opt_params["iters"])
-#     )
-
-#     for it in iterations:
-#         # forward pass and loss
-
-#         measurement_guess = blur.ring_convolve_batch(
-#             estimate, seidel_coeffs, sys_params=sys_params, device=device, verbose=False
-#         )
-#         if crop > 0:
-#             loss = (
-#                 loss_fn(
-#                     (measurement_guess)[crop:-crop, crop:-crop],
-#                     (measurement)[crop:-crop, crop:-crop],
-#                 )
-#                 + tv(estimate[crop:-crop, crop:-crop], opt_params["tv_reg"])
-#                 + opt_params["l2_reg"] * torch.norm(estimate)
-#             )
-#         else:
-#             loss = (
-#                 loss_fn(measurement_guess, measurement)
-#                 + tv(estimate, opt_params["tv_reg"])
-#                 + opt_params["l2_reg"] * torch.norm(estimate)
-#             )
-
-#         if opt_params["plot_loss"]:
-#             losses += [loss.detach().cpu()]
-
-#         # backward
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
-
-#         # project onto [0,1]
-#         estimate.data[estimate.data < 0] = 0
-#         estimate.data[estimate.data > 1] = 1
-
-#     if opt_params["plot_loss"]:
-#         plt.figure()
-#         plt.plot(range(len(losses)), losses)
-#         plt.show()
-
-#     final = util.normalize(estimate.detach().cpu().float())
-
-#     del estimate
-#     gc.collect()
-
-#     return final
-
-
 def blind_recon(
     measurement, opt_params, sys_params, verbose=True, device=torch.device("cpu")
 ):
     """
-    Deblurs an image using a blind deconvolution approach (no calibration needed).
+    Deblur an image using a blind deconvolution approach (no calibration needed).
 
     Parameters
     ----------
     measurement : torch.Tensor
-        Measurement to be deblurred. Should be (M,N).
+        Measurement to be deblurred.
 
     opt_params : dict
         Dictionary of optimization parameters.
@@ -804,11 +661,10 @@ def blind_recon(
     Returns
     -------
     recon : torch.Tensor
-        Deblurred image. Will be (M,N).
+        Deblurred image.
 
-    psfs_estimate : np.ndarray
-        Estimated PSF. Will be (M,N).
-
+    psfs_estimate : torch.Tensor
+        Estimated PSF.
     """
 
     if opt_params["seidel_init"] is None:
@@ -827,7 +683,7 @@ def blind_recon(
 
     for iter in iterations:
         # forward pass
-        psfs_estimate = seidel.compute_psfs(
+        psfs_estimate = psf_model.compute_rdm_psfs(
             torch.cat((coeffs, torch.zeros(5, 1, device=device))),
             desired_list=[(0, 0)],
             sys_params=sys_params,
@@ -877,10 +733,9 @@ def fit_gaussian(
     Estimate the Seidel coefficients of the optical system given a calibration image of
     randomly scattered PSFs and their locations.
 
-
     Parameters
     ----------
-    calib_image : np.ndarray
+    calib_image : torch.Tensor
         Calibration image of randomly scattered PSFs.
 
     sys_params : dict
@@ -908,14 +763,11 @@ def fit_gaussian(
 
     """
 
-    psfs_gt = torch.tensor(calib_image, device=device).float()
-
     var = torch.tensor([1e-2], device=device)
     var.requires_grad = True
 
     optimizer = torch.optim.Adam([var], lr=fit_params["lr"])
     l2_loss_fn = torch.nn.MSELoss()
-    l1_loss_fn = torch.nn.L1Loss()
 
     if fit_params["plot_loss"]:
         losses = []
@@ -926,12 +778,12 @@ def fit_gaussian(
 
     for iter in iterations:
         var_2 = var * torch.ones([2, 1], device=device)
-        psf_estimate = seidel.make_gaussian(
-            var_2, psfs_gt.shape[0], sys_params["L"], device=device
+        psf_estimate = psf_model.make_gaussian(
+            var_2, calib_image.shape[0], sys_params["L"], device=device
         )
         loss = l2_loss_fn(
             ((psf_estimate / psf_estimate.max()).float()),
-            (psfs_gt / psfs_gt.max()).float(),
+            (calib_image / calib_image.max()).float(),
         ) + fit_params["reg"] * l2_loss_fn(var, -var)
 
         if fit_params["plot_loss"]:
@@ -955,7 +807,7 @@ def fit_gaussian(
         plt.subplot(1, 2, 1)
         plt.tight_layout()
         plt.axis("off")
-        plt.imshow(psfs_gt.detach().cpu().numpy(), cmap="inferno")
+        plt.imshow(calib_image.detach().cpu().numpy(), cmap="inferno")
         plt.gca().set_title("Measured PSFs")
         plt.show()
 
@@ -965,14 +817,14 @@ def fit_gaussian(
         plt.show()
 
     del psf_estimate
-    del psfs_gt
+    del calib_image
 
     return var, final_psf
 
 
 def wiener(image, psf, balance=5e-4, reg=None, is_real=True, clip=True):
     """
-    Applies a wiener filter to an image using the psf.
+    Apply a wiener filter to an image using the psf.
 
     Parameters
     ----------
@@ -997,7 +849,7 @@ def wiener(image, psf, balance=5e-4, reg=None, is_real=True, clip=True):
     Returns
     -------
     deconv : torch.Tensor
-        Deblurred image. Will be (M,N).
+        Deblurred image.
 
     Notes
     -----
@@ -1030,28 +882,31 @@ def wiener(image, psf, balance=5e-4, reg=None, is_real=True, clip=True):
 
 
 def tv(img, weight):
+    """
+    Computes the total variation of an image.
+
+    Parameters
+    ----------
+    img : torch.Tensor
+        Image to compute the total variation of.
+
+    weight : float
+        Weighting factor for the total variation.
+
+    Returns
+    -------
+    tv : torch.Tensor
+        Total variation of the image.
+    """
+
     tv_h = ((img[1:, :] - img[:-1, :]).abs()).sum()
     tv_w = ((img[:, 1:] - img[:, :-1]).abs()).sum()
     return weight * (tv_h + tv_w)
 
 
-def center_crop(measurement, des_shape):
-    # Center crop
-    m_center = (measurement.shape[0] // 2, measurement.shape[1] // 2)
-    left, right, up, down = (
-        m_center[1] - des_shape[1] // 2,
-        m_center[1] + int(np.round(des_shape[1] / 2)),
-        m_center[0] - des_shape[0] // 2,
-        m_center[0] + int(np.round(des_shape[0] / 2)),
-    )
-    # TODO: Debug this for images of an odd size.
-    measurement = measurement[left:right, up:down]
-    return measurement
-
-
 def laplacian(ndim, shape, is_real=True):
     """
-    Computes the Laplacian operator in the Fourier domain.
+    Compute the Laplacian operator in the Fourier domain.
 
     Parameters
     ----------
@@ -1092,7 +947,7 @@ def laplacian(ndim, shape, is_real=True):
 
 def ir2tf(imp_resp, shape, dim=None, is_real=True):
     """
-    Implements the ir2tf function from the `restoration` module of scikit-image.
+    Implement the ir2tf function from the `restoration` module of scikit-image.
 
     Parameters
     ----------

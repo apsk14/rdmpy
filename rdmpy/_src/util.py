@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torch.nn.functional import grid_sample
 from scipy.ndimage import median_filter
+from scipy.ndimage import shift as ndshift
 from skimage.feature import corner_peaks
 from skimage.morphology import erosion, disk
 
@@ -19,91 +20,6 @@ import pdb
 
 
 PLT_SIZE = 5
-
-
-def get_calib_info(calib_image, dim, fit_params):
-    """
-    Localizes PSFs in calibration image.
-
-    Parameters
-    ----------
-    calib_image : np.ndarray
-        Calibration image.
-
-    dim : tuple
-        Dimension of desired PSFs. Should be square (N,N).
-
-    fit_params : dict
-        Dictionary of parameters for calibration.
-
-    Returns
-    -------
-    coord_list : list
-        List of coordinates of PSFs in calibration image (xy) format.
-
-    calib_image : np.ndarray
-        Cropped calibration image.
-
-    """
-
-    psf = calib_image.copy()
-    psf[psf < 0] = 0
-    psf[psf < np.quantile(psf, 0.9)] = 0
-    if fit_params["disk"] <= 0:
-        raw_coord = corner_peaks(
-            psf,
-            min_distance=fit_params["min_distance"],
-            indices=True,
-            threshold_rel=fit_params["threshold"],
-        )
-    else:
-        raw_coord = corner_peaks(
-            erosion(psf, disk(fit_params["disk"])),
-            min_distance=fit_params["min_distance"],
-            indices=True,
-            threshold_rel=fit_params["threshold"],
-        )
-    distances = np.sqrt(np.sum(np.square(raw_coord - fit_params["sys_center"]), axis=1))
-    if fit_params["centered_psf"]:
-        center = raw_coord[np.argmin(distances), :]
-        print(center)
-    else:
-        center = fit_params["sys_center"].copy()
-    if dim // 2 > center[0]:
-        PAD = dim // 2 - center[0]
-        calib_image = np.pad(calib_image, ((PAD, 0), (0, 0)))
-        center[0] += PAD
-    if dim // 2 > center[1]:
-        PAD = dim // 2 - center[1]
-        calib_image = np.pad(calib_image, ((0, 0), (PAD, 0)))
-        center[1] += PAD
-    if dim // 2 + center[0] > calib_image.shape[0]:
-        PAD = dim // 2 + center[0] - calib_image.shape[0]
-        calib_image = np.pad(calib_image, ((0, PAD), (0, 0)))
-        center[0] -= PAD
-    if dim // 2 + center[1] > calib_image.shape[1]:
-        PAD = dim // 2 + center[1] - calib_image.shape[1]
-        calib_image = np.pad(calib_image, ((0, 0), (0, PAD)))
-        center[1] -= PAD
-
-    calib_image = calib_image[
-        center[0] - dim // 2 : center[0] + dim // 2,
-        center[1] - dim // 2 : center[1] + dim // 2,
-    ]
-
-    coord_list = []
-    for i in range(raw_coord.shape[0]):
-        if (
-            np.abs(raw_coord[i, 1] - center[1]) < dim // 2
-            and np.abs(center[0] - raw_coord[i, 0]) < dim // 2
-        ):
-            coord_list += [(raw_coord[i, 1] - center[1], center[0] - raw_coord[i, 0])]
-
-    calib_image[calib_image < 0] = 0
-    calib_image[calib_image < np.quantile(calib_image, 0.9)] = 0
-    calib_image = (calib_image / calib_image.sum()) * len(coord_list)
-
-    return coord_list, calib_image
 
 
 def mkdir(path):
@@ -441,10 +357,27 @@ def shift_torch(img, shift, mode="bilinear"):
     img : torch.Tensor
         Shifted image.
     """
+    # # if the shift is larger than half the image size, then shift it in two steps
+
+    # # if shift[0] > img.shape[0] / 4:
+    # #     print("Biiiiig shift")
+    # #     shift_1 = (img.shape[0] / 4, img.shape[1] / 4)
+    # #     shift_2 = (shift[0] - img.shape[0] / 4, shift[1] - img.shape[1] / 4)
+
+    # #     shifted = ndshift(img.cpu(), shift_1)
+    # #     shifted = ndshift(shifted, shift_2)
+
+    # # else:
+    # return torch.tensor(ndshift(img.cpu(), shift), device=img.device)
+
+    # return torch.tensor(shifted, device=img.device)
     device = img.device
-    xs = torch.arange(0, img.shape[1]).float() - shift[1]
-    ys = torch.arange(0, img.shape[0]).float() - shift[0]
+    xs = torch.arange(0, img.shape[1]).float()
+    ys = torch.arange(0, img.shape[0]).float()
     x, y = torch.meshgrid(xs, ys, indexing="xy")
+
+    x = x - shift[1]
+    y = y - shift[0]
 
     gx = 2.0 * (x / (img.shape[1] - 1)) - 1.0
     gy = 2.0 * (y / (img.shape[0] - 1)) - 1.0
