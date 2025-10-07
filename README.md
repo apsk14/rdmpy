@@ -3,10 +3,15 @@
 [![Static Badge](https://img.shields.io/badge/paper-Nature%20Methods-yellow)](https://www.nature.com/articles/s41592-025-02684-5)
 
 ## Announcement
-The official rdmpy python package will be released in May on PyPI and will be pip installable. If you have any feature suggestions or ideas please don't hesitate to reach out.
+The official rdmpy python package will be released in soon on PyPI and will be pip installable. If you have any feature suggestions or ideas please don't hesitate to reach out.
 
 
 ## UPDATES:
+* [May 2025]
+  * We can now do patchwise ring deconvolution! This allows for much larger images (upward of 2048x2048) to be ring   deconvolved faster with less memory useage. If you want to increase speed and decrease memory useage just increase the patch_size argument. Note this is limited to PSFs with spherical, defocus, and field curvature aberrations for now.
+  * To try this new feature, check out the large_images.ipynb notebook. We are able to ring deconvolve much larger image crops than in our paper.
+  * Patchwise sheet deconvolution will be coming shortly!
+
 * [April 2025] MAJOR UPDATE!
   * Our paper is officially published in [Nature Methods](https://www.nature.com/articles/s41592-025-02684-5).
   * The codebase has been updated to accomodate the latest dependency updates. See the updated package versioning below.
