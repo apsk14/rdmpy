@@ -12,7 +12,6 @@ import gc
 from tqdm import tqdm
 
 from ._src import opt, psf_model, util, polar_transform
-import pdb
 
 import matplotlib.pyplot as plt
 
@@ -189,7 +188,7 @@ def calibrate_rdm(
     else:
         seidel_coeffs = coeffs
     if verbose:
-        print("Fitted seidel coefficients: " + str(seidel_coeffs.abs().detach().cpu()))
+        print("Fitted seidel coefficients: " + str(seidel_coeffs.detach().cpu()))
 
     if get_psfs:
         psf_data = get_rdm_psfs(
@@ -202,13 +201,13 @@ def calibrate_rdm(
             verbose=verbose,
             device=device,
         )
-        return seidel_coeffs.abs(), psf_data
+        return seidel_coeffs, psf_data
 
     else:
         if get_inter_seidels:
             seidel_coeffs = coeffs
 
-    return seidel_coeffs.abs()
+    return seidel_coeffs
 
 
 def get_rdm_psfs(
@@ -490,6 +489,7 @@ def calibrate_sdm(
     psf_xy_dim,
     model="gl",
     get_psfs=True,
+    patch_size=0,
     gl_params={},
     gl_opt=[],
     iters=50,
@@ -735,6 +735,7 @@ def calibrate_sdm(
             psf_xy_dim=psf_xy_dim,
             ls_dim=psf_stack.shape[0],
             z_dim=psf_stack.shape[2],
+            patch_size=patch_size,
             gl_params=gl_params,
             oversample=oversample,
             device=device,
@@ -750,6 +751,7 @@ def get_sdm_psfs(
     ls_dim,
     psf_xy_dim,
     z_dim,
+    patch_size=0,
     gl_params={},
     oversample=2,
     verbose=True,
@@ -774,7 +776,7 @@ def get_sdm_psfs(
         The lateral size of the PSF to use. Note this is a single number because the PSF is assumed to fit in a square crop.
         The axial size will be set adaptively according to `spread`.
 
-    max_z_dim : int
+    z_dim : int
         The largest axial size of the PSF to use. Should be no larger than the z-dimension of the sample you would like to sheet deconvolve.
 
     gl_params : dict
@@ -834,6 +836,7 @@ def get_sdm_psfs(
         num_psfs=ls_dim // 2,
         xy_dim=psf_xy_dim,
         zmax=z_dim,
+        patch_size=patch_size,
         oversample=oversample,
         verbose=verbose,
         device=device,
